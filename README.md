@@ -1,47 +1,55 @@
-CalmSync
-CalmSync is a neurofeedback platform that connects to the NeuroSky MindWave Mobile 2 to measure and interpret brainwave activity — specifically meditation, attention, alpha, and beta signals.
-Its goal is to detect different mental states and demonstrate how these states can be influenced through interactive neurofeedback games.
-Overview
-CalmSync enables users to visualize and modulate their cognitive states in real time. The system processes EEG data, stores session information, and offers both relaxing and stress-inducing environments to showcase neurofeedback’s potential.
-Features
-EEG Data Parser: Captures and processes meditation, attention, alpha, and beta wave data from the MindWave sensor.
-State Detection: Classifies user mental states (e.g., relaxed, focused, stressed) based on EEG metrics.
-Game Modules:
-Stress Game: Designed to induce stress (no neurofeedback control).
-Relax Game: Reacts dynamically to alpha/beta wave changes, adjusting the environment in real time.
-Session Reporting: Generates a complete session report in LaTeX.
-SQL History: Logs each session with timestamps, EEG metrics, and classification results.
-System Architecture
-Data Acquisition – Stream EEG data via Bluetooth from the MindWave Mobile 2.
-Data Parser – Convert raw signals into structured metrics (alpha, beta, meditation, concentration).
-State Classification – Identify cognitive states through defined thresholds or ML models.
-Game Interaction – Send feedback values to the game modules to manipulate visuals or difficulty.
-Report Generator – Export session summaries as LaTeX-based PDFs.
-SQL Database – Store and retrieve user session data for analysis and history tracking.
-Technologies
-Python (data parsing, state detection, reporting)
-NeuroSky MindWave SDK
-SQL (SQLite/MySQL) for session history
-LaTeX for automatic report generation
-Game Engine (Unity/Pygame) for neurofeedback environments
-Project Structure
-calmSync/
-│
-├── parser/              # EEG data parser and communication with MindWave
-├── states/              # Mental state detection logic
-├── games/
-│   ├── stress_game/     # Game without neurofeedback
-│   └── relax_game/      # Neurofeedback-based environment
-├── reports/             # LaTeX report generation
-├── database/            # SQL schema and session storage
-└── main.py              # Entry point for running CalmSync
-Demo Workflow
-Connect the MindWave Mobile 2 via Bluetooth.
-Run the parser to start streaming EEG data.
-Choose a game mode (stress or relax).
-Play and observe neurofeedback in action.
-After the session, generate a LaTeX report and store session data in SQL.
-Future Directions
-Advanced classification using deep learning.
-Cross-session adaptation models.
-Real-time dashboards for EEG visualization.
+# CalmSync
+
+CalmSync is a neurofeedback-based system that collects and analyzes EEG data from the **NeuroSky Mindwave Mobile 2** sensor to detect and interact with different mental states. The project demonstrates how **alpha, beta, meditation, and concentration** signals can be used to influence real-time game environments.
+
+---
+
+## Overview
+
+CalmSync consists of three main components:
+
+1. **Data Parser**  
+   - Acquires and preprocesses EEG data from the Mindwave Mobile 2.  
+   - Extracts key metrics: meditation, concentration, alpha, and beta waves.  
+   - Stores session data in an SQL database for historical tracking.
+
+2. **Game Modules**  
+   - **Stress Game:** Designed to induce stress; does *not* use neurofeedback.  
+   - **Relaxation Game:** Uses real-time alpha/beta wave feedback to dynamically modify scenery and promote relaxation.
+
+3. **Session Reporting**  
+   - Generates a detailed session report in **LaTeX** format.  
+   - Includes metrics, trends, and user-specific session summaries.
+
+---
+
+## Objectives
+
+- Demonstrate the feasibility of detecting distinct mental states from EEG signals.  
+- Showcase how neurofeedback can influence and stabilize these states through interactive experiences.  
+- Provide a foundation for future neuroadaptive gaming and mindfulness research.
+
+---
+
+## Features
+
+- Real-time EEG signal acquisition and parsing  
+- SQL-based session history and data persistence  
+- Neurofeedback-controlled relaxation environment  
+- Automated LaTeX report generation for each session  
+- Modular architecture for easy extension of new game types
+
+---
+
+## Tech Stack
+
+- **Hardware:** NeuroSky Mindwave Mobile 2  
+- **Languages:** Python (for data parsing, SQL handling, LaTeX report generation)  
+- **Database:** SQLite or MySQL  
+- **Game Engine:** Unity / Pygame (depending on implementation)  
+- **Visualization:** Matplotlib / PyQt (optional)
+
+---
+
+## Repository Structure
+

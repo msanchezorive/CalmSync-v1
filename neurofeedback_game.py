@@ -18,18 +18,24 @@ from generic_parser import parse_packet, extract_data_from_payload
 NEUROSKY_PORT = "/dev/tty.MindWaveMobile"  # o "COM10" en Windows
 NEUROSKY_BAUD = 57600
 
-# Códigos de NeuroSky (mismo que en more_functions)
+# Códigos de NeuroSky
 CODE_HANDLERS_EEG = {0x83: 'eeg_power'}
+CODE_HANDLERS_ATT_MED = {0x04: 'attention', 0x05: 'meditation'}
 
-# Índices de bandas (mismo que en more_functions)
+# Índices de bandas
 ALPHA_IDX = [2, 3]  # Low-Alpha, High-Alpha
 BETA_IDX = [4, 5]   # Low-Beta, High-Beta
 
-# Suavizado exponencial (mismo que en more_functions)
-SMOOTHING_ALPHA = 0.2
+# NUEVO: Suavizado más agresivo para evitar cambios bruscos
+SMOOTHING_ALPHA = 0.15  # Más lento = más suave (antes era 0.2)
+SMOOTHING_IR = 0.1      # Suavizado extra para el índice IR
+
+# NUEVO: Umbrales de calidad de señal
+MIN_ATTENTION_QUALITY = 20   # Atención mínima para considerar válido
+MIN_MEDITATION_QUALITY = 15  # Meditación mínima para considerar válido
 
 # ---------------------------------------------------------------------
-# CONFIGURATION & CONSTANTS (del juego original)
+# CONFIGURATION & CONSTANTS
 # ---------------------------------------------------------------------
 
 ASSETS_PATH = 'assets'
@@ -52,26 +58,31 @@ IR_MIN = 0.3
 IR_MAX = 3.0
 IR_RANGE = IR_MAX - IR_MIN
 
+# NUEVO: Configuración de rayos
+LIGHTNING_DURATION_FRAMES = 5  # Cuánto dura visible un rayo
+LIGHTNING_MIN_INTERVAL = 30    # Mínimo frames entre rayos
+LIGHTNING_MAX_INTERVAL = 90    # Máximo frames entre rayos
+
 
 # ---------------------------------------------------------------------
-# NUEVO: LECTOR DE NEUROSKY EN TIEMPO REAL
+# LECTOR DE NEUROSKY CON FILTRADO DE CALIDAD
 # ---------------------------------------------------------------------
 
 class NeuroSkyReader:
     """
-    Lee datos del NeuroSky en un hilo separado.
-    
-    PASO 1: Usa las mismas funciones de 'more_functions.py' pero adaptadas
-    para que se ejecuten continuamente en segundo plano.
+    MEJORA 1: Ahora también lee Atención y Meditación para filtrar 
+    datos de mala calidad (como al abrir/cerrar ojos).
     """
     
     def __init__(self, port: str, baud: int):
         self.port = port
         self.baud = baud
         
-        # Estado actual (igual que en more_functions)
+        # Estado actual
         self.alpha = 0.0
         self.beta = 0.0
+        self.attention = 0.0      # NUEVO
+        self.meditation = 0.0     # NUEVO
         self.last_raw_alpha = 0.0
         self.last_raw_beta = 0.0
         
@@ -85,9 +96,7 @@ class NeuroSkyReader:
         self.lock = threading.Lock()
     
     def get_alpha_from_payload(self, payload: bytes) -> Optional[float]:
-        """
-        PASO 2: Extrae Alpha del payload (copiado de more_functions.py)
-        """
+        """Extrae Alpha del payload."""
         data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
         if 'eeg_power' in data:
             powers = data['eeg_power']
@@ -96,9 +105,7 @@ class NeuroSkyReader:
         return None
     
     def get_beta_from_payload(self, payload: bytes) -> Optional[float]:
-        """
-        PASO 3: Extrae Beta del payload (copiado de more_functions.py)
-        """
+        """Extrae Beta del payload."""
         data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
         if 'eeg_power' in data:
             powers = data['eeg_power']
@@ -106,38 +113,58 @@ class NeuroSkyReader:
             return beta_val
         return None
     
+    def get_attention_meditation(self, payload: bytes) -> Tuple[Optional[float], Optional[float]]:
+        """
+        MEJORA 2: Extrae Atención y Meditación para validar calidad.
+        """
+        data = extract_data_from_payload(payload, CODE_HANDLERS_ATT_MED)
+        att = data.get('attention')
+        med = data.get('meditation')
+        return att, med
+    
     def _read_loop(self):
-        """
-        PASO 4: Bucle continuo que lee del puerto serial.
-        Se ejecuta en un hilo separado para no bloquear el juego.
-        """
+        """Bucle de lectura con validación de calidad."""
         try:
             self.serial_port = serial.Serial(self.port, self.baud, timeout=1)
             self.connection_status = "Conectado"
             print(f"✅ NeuroSky conectado en {self.port}")
             
             while self.running:
-                # Lee un paquete usando el parser genérico
                 payload = parse_packet(self.serial_port)
                 
                 if payload is None:
                     continue
                 
-                # Extrae Alpha y Beta
+                # Extrae todos los datos
                 raw_alpha = self.get_alpha_from_payload(payload)
                 raw_beta = self.get_beta_from_payload(payload)
+                att, med = self.get_attention_meditation(payload)
                 
-                # PASO 5: Aplica suavizado exponencial (mismo que more_functions)
-                with self.lock:  # Thread-safe
-                    if raw_alpha is not None:
-                        self.last_raw_alpha = raw_alpha
-                        self.alpha = (SMOOTHING_ALPHA * raw_alpha + 
-                                    (1 - SMOOTHING_ALPHA) * self.alpha)
+                with self.lock:
+                    # MEJORA 3: Actualiza atención y meditación siempre
+                    if att is not None:
+                        self.attention = (SMOOTHING_ALPHA * att + 
+                                        (1 - SMOOTHING_ALPHA) * self.attention)
                     
-                    if raw_beta is not None:
-                        self.last_raw_beta = raw_beta
-                        self.beta = (SMOOTHING_ALPHA * raw_beta + 
-                                   (1 - SMOOTHING_ALPHA) * self.beta)
+                    if med is not None:
+                        self.meditation = (SMOOTHING_ALPHA * med + 
+                                         (1 - SMOOTHING_ALPHA) * self.meditation)
+                    
+                    # MEJORA 4: Solo actualiza Alpha/Beta si hay buena calidad
+                    # (evita ruido al abrir/cerrar ojos)
+                    quality_ok = (self.attention >= MIN_ATTENTION_QUALITY or 
+                                 self.meditation >= MIN_MEDITATION_QUALITY)
+                    
+                    if quality_ok:
+                        if raw_alpha is not None:
+                            self.last_raw_alpha = raw_alpha
+                            self.alpha = (SMOOTHING_ALPHA * raw_alpha + 
+                                        (1 - SMOOTHING_ALPHA) * self.alpha)
+                        
+                        if raw_beta is not None:
+                            self.last_raw_beta = raw_beta
+                            self.beta = (SMOOTHING_ALPHA * raw_beta + 
+                                       (1 - SMOOTHING_ALPHA) * self.beta)
         
         except serial.SerialException as e:
             self.connection_status = f"Error: {e}"
@@ -161,17 +188,16 @@ class NeuroSkyReader:
         if self.thread:
             self.thread.join(timeout=2)
     
-    def get_values(self) -> Tuple[float, float]:
+    def get_values(self) -> Tuple[float, float, float, float]:
         """
-        PASO 6: Obtiene valores suavizados de forma thread-safe.
-        El juego llamará a esto en cada frame.
+        MEJORA 5: Ahora también devuelve atención y meditación.
         """
         with self.lock:
-            return self.alpha, self.beta
+            return self.alpha, self.beta, self.attention, self.meditation
 
 
 # ---------------------------------------------------------------------
-# DATA CLASSES (sin cambios)
+# DATA CLASSES
 # ---------------------------------------------------------------------
 
 @dataclass
@@ -186,15 +212,33 @@ class RainParticle:
 
 
 @dataclass
+class Lightning:
+    """
+    MEJORA 6: Nueva clase para manejar rayos múltiples.
+    """
+    x: float
+    y: float
+    frames_remaining: int
+    
+    def update(self) -> bool:
+        """Retorna True si sigue visible."""
+        self.frames_remaining -= 1
+        return self.frames_remaining > 0
+
+
+@dataclass
 class GameState:
     alpha: float
     beta: float
+    attention: float
+    meditation: float
     ir_normalized: float
+    ir_smoothed: float  # NUEVO: IR con suavizado extra
     frame_count: int
 
 
 # ---------------------------------------------------------------------
-# ASSET MANAGEMENT (sin cambios)
+# ASSET MANAGEMENT
 # ---------------------------------------------------------------------
 
 class AssetManager:
@@ -223,7 +267,7 @@ class AssetManager:
 
 
 # ---------------------------------------------------------------------
-# VISUAL EFFECTS (sin cambios)
+# VISUAL EFFECTS
 # ---------------------------------------------------------------------
 
 class VisualEffects:
@@ -232,6 +276,9 @@ class VisualEffects:
         self.dark_overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
 
     def draw_with_opacity(self, image: pygame.Surface, pos: Tuple[int, int], opacity: float):
+        """
+        MEJORA 7: Dibuja imágenes con opacidad controlada.
+        """
         opacity = max(0.0, min(1.0, opacity))
         alpha = int(255 * opacity)
 
@@ -243,13 +290,82 @@ class VisualEffects:
             self.screen.blit(image, pos)
 
     def draw_dark_overlay(self, opacity: float):
+        """Dibuja capa oscura (tormenta)."""
         alpha = int(255 * max(0.0, min(1.0, opacity)))
         self.dark_overlay.fill(COLOR_DARK_OVERLAY + (alpha,))
         self.screen.blit(self.dark_overlay, (0, 0))
 
 
 # ---------------------------------------------------------------------
-# RAIN SYSTEM (sin cambios)
+# LIGHTNING SYSTEM
+# ---------------------------------------------------------------------
+
+class LightningSystem:
+    """
+    MEJORA 8: Sistema de rayos múltiples que aparecen según el estrés.
+    """
+    
+    def __init__(self, lightning_image: pygame.Surface):
+        self.lightning_image = lightning_image
+        self.lightnings: List[Lightning] = []
+        self.frames_since_last = 0
+        self.next_spawn_interval = LIGHTNING_MIN_INTERVAL
+    
+    def update(self, stress_level: float):
+        """
+        stress_level: 0.0 = relajado, 1.0 = muy estresado
+        """
+        # Actualiza rayos existentes
+        self.lightnings = [l for l in self.lightnings if l.update()]
+        
+        # Solo genera rayos si hay suficiente estrés
+        if stress_level < 0.3:  # Umbral mínimo de estrés
+            self.frames_since_last = 0
+            return
+        
+        self.frames_since_last += 1
+        
+        # Calcula intervalo basado en estrés (más estrés = más rayos)
+        stress_factor = stress_level ** 2  # Cuadrático para más dramatismo
+        interval_range = LIGHTNING_MAX_INTERVAL - LIGHTNING_MIN_INTERVAL
+        self.next_spawn_interval = int(LIGHTNING_MAX_INTERVAL - 
+                                       (interval_range * stress_factor))
+        
+        # Genera nuevo rayo si es momento
+        if self.frames_since_last >= self.next_spawn_interval:
+            self.spawn_lightning()
+            self.frames_since_last = 0
+    
+    def spawn_lightning(self):
+        """Crea un nuevo rayo en posición aleatoria."""
+        x = random.randint(100, SCREEN_WIDTH - 100)
+        y = random.randint(50, 200)
+        
+        self.lightnings.append(Lightning(
+            x=x,
+            y=y,
+            frames_remaining=LIGHTNING_DURATION_FRAMES
+        ))
+    
+    def draw(self, effects: VisualEffects, stress_level: float):
+        """Dibuja todos los rayos activos."""
+        if stress_level < 0.3:
+            return
+        
+        for lightning in self.lightnings:
+            # Opacidad basada en frames restantes (efecto de parpadeo)
+            opacity = min(1.0, lightning.frames_remaining / LIGHTNING_DURATION_FRAMES)
+            opacity *= stress_level  # También modulado por estrés
+            
+            effects.draw_with_opacity(
+                self.lightning_image,
+                (lightning.x, lightning.y),
+                opacity
+            )
+
+
+# ---------------------------------------------------------------------
+# RAIN SYSTEM
 # ---------------------------------------------------------------------
 
 class RainSystem:
@@ -281,7 +397,7 @@ class RainSystem:
 
 
 # ---------------------------------------------------------------------
-# CLOUD SYSTEM (sin cambios)
+# CLOUD SYSTEM
 # ---------------------------------------------------------------------
 
 class CloudSystem:
@@ -308,21 +424,18 @@ class CloudSystem:
 
 
 # ---------------------------------------------------------------------
-# MAIN GAME - MODIFICADO PARA USAR DATOS REALES
+# MAIN GAME
 # ---------------------------------------------------------------------
 
 class NeurofeedbackGame:
-    """
-    PASO 7: Juego modificado para usar datos reales del NeuroSky
-    en lugar de datos simulados.
-    """
+    """Juego de neurofeedback con datos reales y transiciones suaves."""
     
     def __init__(self, use_real_data: bool = True):
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("CalmSync - Neurofeedback en Tiempo Real")
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.Font(None, 28)
+        self.font = pygame.font.Font(None, 24)
 
         # Initialize systems
         self.assets = AssetManager()
@@ -331,14 +444,18 @@ class NeurofeedbackGame:
         # Load assets
         self.bg_image = self.assets.load_image('neurofeedback_scenery/paisaje.jpg')
         self.sun_image = self.assets.load_image('neurofeedback_scenery/sol_png.png')
-        self.lightning_image = self.assets.load_image('neurofeedback_scenery/rayo_png.png')
+        lightning_image = self.assets.load_image('neurofeedback_scenery/rayo_png.png')
         cloud_image = self.assets.load_image('neurofeedback_scenery/nube_png.png')
+
+        # MEJORA 9: Escala el sol para que sea más visible
+        self.sun_image = pygame.transform.scale(self.sun_image, (150, 150))
 
         # Initialize game systems
         self.rain = RainSystem()
         self.clouds = CloudSystem(cloud_image)
+        self.lightning = LightningSystem(lightning_image)  # NUEVO
 
-        # PASO 8: Inicializa el lector de NeuroSky
+        # Inicializa NeuroSky
         self.use_real_data = use_real_data
         self.neurosky: Optional[NeuroSkyReader] = None
         
@@ -363,30 +480,34 @@ class NeurofeedbackGame:
         self.state = GameState(
             alpha=3.0,
             beta=9.0,
+            attention=0.0,
+            meditation=0.0,
             ir_normalized=0.0,
+            ir_smoothed=0.0,  # NUEVO
             frame_count=0
         )
 
         self.running = True
 
     def calculate_ir_normalized(self, alpha: float, beta: float) -> float:
-        """
-        PASO 9: Calcula el IR normalizado (mismo algoritmo que antes).
-        Este valor modula el escenario entre tormenta (0.0) y calma (1.0).
-        """
-        beta = max(0.1, beta)  # Evita división por cero
+        """Calcula IR normalizado."""
+        beta = max(0.1, beta)
         ir = alpha / beta
         return max(0.0, min(1.0, (ir - IR_MIN) / IR_RANGE))
 
     def update_data(self):
         """
-        PASO 10: Actualiza los datos de Alpha/Beta según la fuente activa.
+        MEJORA 10: Actualiza datos con suavizado extra en el IR.
         """
         if self.use_real_data and self.neurosky:
-            # Obtiene datos reales del NeuroSky
-            self.state.alpha, self.state.beta = self.neurosky.get_values()
+            # Obtiene datos reales
+            alpha, beta, att, med = self.neurosky.get_values()
+            self.state.alpha = alpha
+            self.state.beta = beta
+            self.state.attention = att
+            self.state.meditation = med
         else:
-            # Usa datos simulados (para testing)
+            # Datos simulados
             self.state.frame_count += 1
             if self.state.frame_count >= FRAMES_PER_STEP:
                 self.state.frame_count = 0
@@ -394,66 +515,88 @@ class NeurofeedbackGame:
             
             self.state.alpha = self.alpha_data[self.data_index]
             self.state.beta = self.beta_data[self.data_index]
+            self.state.attention = 50.0
+            self.state.meditation = 50.0
         
-        # PASO 11: Calcula el IR normalizado que controla el escenario
+        # Calcula IR normalizado
         self.state.ir_normalized = self.calculate_ir_normalized(
             self.state.alpha, self.state.beta
         )
+        
+        # MEJORA 11: Aplica suavizado EXTRA al IR para evitar saltos bruscos
+        self.state.ir_smoothed = (SMOOTHING_IR * self.state.ir_normalized + 
+                                  (1 - SMOOTHING_IR) * self.state.ir_smoothed)
 
     def render(self):
-        """Renderiza el frame actual (sin cambios en la lógica visual)."""
-        ir_norm = self.state.ir_normalized
+        """
+        MEJORA 12: Renderizado mejorado con sol visible y rayos.
+        """
+        # Usa el IR suavizado para transiciones más suaves
+        ir_norm = self.state.ir_smoothed
+        stress_level = 1.0 - ir_norm  # Inverso: alto estrés = valor alto
 
-        # Parámetros visuales basados en IR
-        filter_opacity = 1.0 - ir_norm
-        sun_opacity = ir_norm
-        cloud_density = 1.0 - ir_norm
-        rain_density = 1.0 - ir_norm
+        # Parámetros visuales
+        sun_opacity = ir_norm ** 0.5  # Raíz cuadrada para que aparezca antes
+        cloud_density = stress_level
+        rain_density = stress_level
+        darkness = stress_level * 0.7  # Menos oscuridad para ver mejor
 
-        # Draw sky
+        # 1. Cielo base
         self.screen.fill(COLOR_SKY)
 
-        # Draw sun (más visible cuando relajado)
-        sun_pos = (SCREEN_WIDTH - self.sun_image.get_width() - 50, 50)
-        self.effects.draw_with_opacity(self.sun_image, sun_pos, sun_opacity)
+        # 2. SOL (dibujado PRIMERO para que esté detrás)
+        # MEJORA 13: Posición más visible del sol
+        sun_x = SCREEN_WIDTH - self.sun_image.get_width() - 80
+        sun_y = 30
+        self.effects.draw_with_opacity(self.sun_image, (sun_x, sun_y), sun_opacity)
 
-        # Draw landscape
+        # 3. Paisaje
         landscape_y = SCREEN_HEIGHT - self.bg_image.get_height()
         self.screen.blit(self.bg_image, (0, landscape_y))
 
-        # Draw clouds
+        # 4. Nubes (con densidad según estrés)
         self.clouds.draw(self.effects, cloud_density)
 
-        # Draw rain
+        # 5. Lluvia
         self.rain.draw(self.screen, rain_density)
 
-        # Draw dark overlay (más oscuro cuando estresado)
-        self.effects.draw_dark_overlay(filter_opacity)
+        # 6. RAYOS (solo cuando hay estrés)
+        self.lightning.draw(self.effects, stress_level)
 
-        # PASO 12: Info mejorada en pantalla
-        text_color = (255, 255, 255) if ir_norm < 0.5 else (0, 0, 0)
+        # 7. Capa oscura (menos intensa para ver mejor)
+        self.effects.draw_dark_overlay(darkness)
+
+        # 8. Info en pantalla
+        self._draw_info(ir_norm, stress_level)
+
+    def _draw_info(self, ir_norm: float, stress_level: float):
+        """Dibuja información en pantalla."""
+        text_color = (255, 255, 255) if ir_norm < 0.5 else (50, 50, 50)
         
-        # Línea 1: Datos principales
-        text1 = f"IR: {ir_norm:.2f} | α: {self.state.alpha:.1f} | β: {self.state.beta:.1f}"
-        text_surface1 = self.font.render(text1, True, text_color)
-        self.screen.blit(text_surface1, (10, 10))
+        lines = [
+            f"IR: {ir_norm:.2f} | α: {self.state.alpha:.1f} | β: {self.state.beta:.1f}",
+            f"Atención: {self.state.attention:.0f} | Meditación: {self.state.meditation:.0f}",
+            f"Estrés: {stress_level*100:.0f}% | Rayos: {len(self.lightning.lightnings)}"
+        ]
         
-        # Línea 2: Estado
+        # Estado mental
+        if ir_norm < 0.35:
+            state_text = "⚡ ESTRESADO - Respira profundo"
+        elif ir_norm < 0.65:
+            state_text = "😐 NEUTRAL - Sigue así"
+        else:
+            state_text = "☀️ RELAJADO - ¡Excelente!"
+        lines.append(state_text)
+        
+        # Modo
         mode = "REAL" if self.use_real_data else "SIMULACIÓN"
         status = self.neurosky.connection_status if self.neurosky else "N/A"
-        text2 = f"Modo: {mode} | Estado: {status}"
-        text_surface2 = self.font.render(text2, True, text_color)
-        self.screen.blit(text_surface2, (10, 40))
+        lines.append(f"Modo: {mode} | Estado: {status}")
         
-        # Línea 3: Interpretación
-        if ir_norm < 0.4:
-            state_text = "ESTRESADO - Respira profundo"
-        elif ir_norm < 0.7:
-            state_text = "NEUTRAL - Sigue así"
-        else:
-            state_text = "RELAJADO - Excelente!"
-        text_surface3 = self.font.render(state_text, True, text_color)
-        self.screen.blit(text_surface3, (10, 70))
+        # Dibuja cada línea
+        for i, line in enumerate(lines):
+            text_surface = self.font.render(line, True, text_color)
+            self.screen.blit(text_surface, (10, 10 + i * 25))
 
     def run(self):
         """Bucle principal del juego."""
@@ -461,8 +604,8 @@ class NeurofeedbackGame:
         print("🎮 CalmSync - Neurofeedback en Tiempo Real")
         print("="*60)
         print("📊 El escenario cambia según tu estado mental:")
-        print("   • Alpha alto + Beta bajo = Relajación → ☀️ Sol brillante")
-        print("   • Alpha bajo + Beta alto = Estrés → 🌧️ Tormenta")
+        print("   • Relajado (IR alto)  → ☀️ Sol, cielo despejado")
+        print("   • Estresado (IR bajo) → ⚡ Rayos, tormenta")
         print("\n⌨️  Presiona ESC para salir\n")
         
         while self.running:
@@ -474,13 +617,14 @@ class NeurofeedbackGame:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
 
-            # PASO 13: Actualiza datos (reales o simulados)
+            # Actualiza datos
             self.update_data()
 
-            # Update systems
-            rain_density = 1.0 - self.state.ir_normalized
-            self.rain.update(rain_density)
-            self.clouds.update(self.state.ir_normalized)
+            # Actualiza sistemas
+            stress_level = 1.0 - self.state.ir_smoothed
+            self.rain.update(stress_level)
+            self.clouds.update(self.state.ir_smoothed)
+            self.lightning.update(stress_level)  # NUEVO
 
             # Render
             self.render()
@@ -502,7 +646,6 @@ class NeurofeedbackGame:
 # ---------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # PASO 14: Puedes elegir el modo al ejecutar
     import argparse
     
     parser = argparse.ArgumentParser(description='CalmSync Neurofeedback Game')

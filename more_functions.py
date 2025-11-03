@@ -3,7 +3,9 @@ import time
 from generic_parser import parse_packet, extract_data_from_payload
 
 # ===== CONFIG =====
-PORT = "COM10" #cambiarlo segun el port que use tu ordenador 
+#PORT = "COM10" #cambiarlo segun el port que use tu ordenador 
+#BAUD = 57600
+PORT = "/dev/tty.MindWaveMobile"
 BAUD = 57600
 
 # Códigos de NeuroSky

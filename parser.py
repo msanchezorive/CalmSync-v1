@@ -144,8 +144,10 @@ class RealtimePlotRecorder:
 
 
 # ============ MAIN CODE ============
-PORT = "COM10"
-BAUD = 115200
+# PORT = "COM10"
+# BAUD = 115200
+PORT = "/dev/tty.MindWaveMobile"
+BAUD = 9600
 
 # Create recorder and parser
 recorder = RealtimePlotRecorder(window_size=250)
@@ -159,6 +161,7 @@ try:
         # Read available data and feed to parser
         if ser.in_waiting > 0:
             data = ser.read(ser.in_waiting)
+            print(f"Data: {data}")
             parser.feed(data)
             
 except KeyboardInterrupt:

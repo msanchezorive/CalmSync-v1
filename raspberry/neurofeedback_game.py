@@ -3,6 +3,8 @@ import sys
 import random
 import os
 import threading
+import time
+import statistics
 import serial
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
@@ -29,6 +31,27 @@ BETA_IDX = [4, 5]   # Low-Beta, High-Beta
 # Suavizado
 SMOOTHING_ALPHA = 0.15
 SMOOTHING_IR = 0.1
+
+# Calibración personalizada
+CALIBRATION_DURATION = 10.0          # Segundos de captura estable
+CALIBRATION_STABLE_SECONDS = 2.0      # Tiempo mínimo con señal estable antes de registrar
+CALIBRATION_MIN_CONFIDENCE = 0.65     # Confianza mínima para usar muestras
+CALIBRATION_MIN_SAMPLES = 90          # Requiere ~9 segundos a 10 Hz
+CALIBRATION_STD_RANGE = 2.0           # Rango ±STD usado para normalizar
+CALIBRATION_MIN_STD = 0.02            # Evita divisiones con desviación casi cero
+
+# Limitadores de transición IR (evita saltos pero mantiene respuesta)
+IR_MAX_STEP_UP = 0.06   # Relajación rápida al cerrar ojos
+IR_MAX_STEP_DOWN = 0.08 # Estrés al abrir ojos sin picos desagradables
+
+# Filtro de artefactos por parpadeo/ojos
+EYE_FAST_ALPHA = 0.4
+EYE_SLOW_ALPHA = 0.05
+EYE_SPIKE_THRESHOLD = 1.7
+EYE_DROP_THRESHOLD = 0.65
+EYE_MIN_DELTA = 0.3
+EYE_SUPPRESSION_GAIN = 0.45
+EYE_SUPPRESSION_DECAY = 1.4  # segundos para volver a 0
 
 # MEJORA: Sistema de confianza gradual en lugar de umbral abrupto
 CONFIDENCE_INCREASE_RATE = 0.05  # Qué tan rápido sube la confianza
@@ -240,6 +263,87 @@ class GameState:
     ir_normalized: float
     ir_smoothed: float
     frame_count: int
+
+
+@dataclass
+class BaselineProfile:
+    """Perfil estadístico de la persona para normalizar su IR."""
+    mean: float
+    std: float
+
+    @property
+    def lower(self) -> float:
+        return self.mean - CALIBRATION_STD_RANGE * self.std
+
+    @property
+    def upper(self) -> float:
+        return self.mean + CALIBRATION_STD_RANGE * self.std
+
+    def normalize(self, ratio: float) -> float:
+        span = self.upper - self.lower
+        if span <= 0:
+            return 0.5
+        return max(0.0, min(1.0, (ratio - self.lower) / span))
+
+
+class EyeArtifactFilter:
+    """Detecta cierres/aperturas de ojos y amortigua su impacto en el IR."""
+
+    def __init__(self):
+        self.fast_alpha: Optional[float] = None
+        self.slow_alpha: Optional[float] = None
+        self.suppression = 0.0
+        self.last_clean_ir = 0.5
+        self.last_time = time.time()
+
+    def update_alpha(self, alpha_value: float):
+        alpha_value = max(alpha_value, 1e-6)
+        if self.fast_alpha is None or self.slow_alpha is None:
+            self.fast_alpha = alpha_value
+            self.slow_alpha = alpha_value
+            return
+
+        self.fast_alpha += (alpha_value - self.fast_alpha) * EYE_FAST_ALPHA
+        self.slow_alpha += (alpha_value - self.slow_alpha) * EYE_SLOW_ALPHA
+
+        if self.slow_alpha <= 0:
+            return
+
+        ratio = self.fast_alpha / self.slow_alpha
+        delta = abs(self.fast_alpha - self.slow_alpha)
+
+        if ratio >= EYE_SPIKE_THRESHOLD and delta >= EYE_MIN_DELTA:
+            self._boost_suppression(1.0)
+        elif ratio <= EYE_DROP_THRESHOLD and delta >= EYE_MIN_DELTA:
+            self._boost_suppression(0.6)
+
+    def _boost_suppression(self, intensity: float):
+        self.suppression = min(1.0, self.suppression + intensity * EYE_SUPPRESSION_GAIN)
+
+    def apply(self, ir_value: float) -> float:
+        now = time.time()
+        dt = now - self.last_time
+        self.last_time = now
+
+        if self.suppression > 0.0:
+            decay = dt / max(EYE_SUPPRESSION_DECAY, 1e-3)
+            self.suppression = max(0.0, self.suppression - decay)
+            blended = ((1 - self.suppression) * ir_value +
+                       self.suppression * self.last_clean_ir)
+        else:
+            blended = ir_value
+
+        if self.suppression < 0.05:
+            self.last_clean_ir = blended
+
+        return blended
+
+    def status_text(self) -> str:
+        if self.suppression >= 0.7:
+            return "Ojos cerrados"
+        if self.suppression >= 0.3:
+            return "Filtrando"
+        return "Libre"
 
 
 # ---------------------------------------------------------------------
@@ -496,11 +600,34 @@ class NeurofeedbackGame:
         )
 
         self.running = True
+        self._ir_initialized = False
+        self.calibration_profile: Optional[BaselineProfile] = None
+        self.calibration_summary = "Pendiente"
+        if not self.use_real_data:
+            self.calibration_summary = "Global (simulación)"
+        self.eye_filter = EyeArtifactFilter()
+
+    def _compute_ir_ratio(self, alpha: float, beta: float) -> float:
+        beta = max(0.1, beta)
+        return alpha / beta
 
     def calculate_ir_normalized(self, alpha: float, beta: float) -> float:
-        beta = max(0.1, beta)
-        ir = alpha / beta
-        return max(0.0, min(1.0, (ir - IR_MIN) / IR_RANGE))
+        ratio = self._compute_ir_ratio(alpha, beta)
+        if self.calibration_profile:
+            return self.calibration_profile.normalize(ratio)
+        return max(0.0, min(1.0, (ratio - IR_MIN) / IR_RANGE))
+
+    def _limit_ir_transition(self, previous: float, target: float) -> float:
+        if not self._ir_initialized:
+            self._ir_initialized = True
+            return target
+
+        delta = target - previous
+        if delta > 0:
+            delta = min(delta, IR_MAX_STEP_UP)
+        else:
+            delta = max(delta, -IR_MAX_STEP_DOWN)
+        return previous + delta
 
     def update_data(self):
         if self.use_real_data and self.neurosky:
@@ -521,13 +648,139 @@ class NeurofeedbackGame:
             self.state.attention = 50.0
             self.state.meditation = 50.0
             self.state.confidence = 1.0
+
+        self.eye_filter.update_alpha(self.state.alpha)
         
         self.state.ir_normalized = self.calculate_ir_normalized(
             self.state.alpha, self.state.beta
         )
+        filtered_ir = self.eye_filter.apply(self.state.ir_normalized)
         
-        self.state.ir_smoothed = (SMOOTHING_IR * self.state.ir_normalized + 
-                                  (1 - SMOOTHING_IR) * self.state.ir_smoothed)
+        blended = (SMOOTHING_IR * filtered_ir + 
+                   (1 - SMOOTHING_IR) * self.state.ir_smoothed)
+        self.state.ir_smoothed = self._limit_ir_transition(self.state.ir_smoothed, blended)
+
+    def perform_calibration(self):
+        if not self.use_real_data or not self.neurosky:
+            return
+
+        print("\n🧘 Iniciando calibración personalizada...")
+        print("   Mantén postura cómoda, relaja los hombros y respira profundo.\n")
+
+        samples: List[float] = []
+        stable_start: Optional[float] = None
+        collection_start: Optional[float] = None
+
+        while self.running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    return
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.running = False
+                        return
+                    if event.key == pygame.K_SPACE:
+                        print("⏭️  Calibración omitida por el usuario.")
+                        self.calibration_summary = "Manual"
+                        return
+
+            alpha, beta, _, _, confidence = self.neurosky.get_values()
+            ratio = self._compute_ir_ratio(alpha, beta)
+
+            collecting = False
+            if confidence >= CALIBRATION_MIN_CONFIDENCE:
+                if stable_start is None:
+                    stable_start = time.time()
+                    collection_start = None
+                    samples.clear()
+
+                stable_elapsed = time.time() - stable_start
+                if stable_elapsed >= CALIBRATION_STABLE_SECONDS:
+                    collecting = True
+                    if collection_start is None:
+                        collection_start = time.time()
+                        samples.clear()
+                    samples.append(ratio)
+            else:
+                stable_start = None
+                collection_start = None
+                samples.clear()
+
+            progress = 0.0
+            if collection_start:
+                progress = min(1.0, (time.time() - collection_start) / CALIBRATION_DURATION)
+
+            collecting_enough = (
+                collection_start is not None and
+                (time.time() - collection_start) >= CALIBRATION_DURATION and
+                len(samples) >= CALIBRATION_MIN_SAMPLES
+            )
+
+            self._render_calibration_screen(
+                progress=progress,
+                confidence=confidence,
+                samples=len(samples),
+                collecting=collecting,
+                stable=stable_start is not None
+            )
+            pygame.display.flip()
+            self.clock.tick(FPS)
+
+            if collecting_enough:
+                break
+
+        if not samples:
+            print("⚠️ No se pudo calcular baseline. Se usa mapeo genérico.")
+            self.calibration_summary = "Fallback"
+            return
+
+        mean_value = statistics.fmean(samples)
+        if len(samples) > 1:
+            std_value = statistics.pstdev(samples)
+        else:
+            std_value = 0.0
+
+        adaptive_floor = max(CALIBRATION_MIN_STD, abs(mean_value) * 0.05)
+        std_value = max(std_value, adaptive_floor)
+
+        self.calibration_profile = BaselineProfile(mean=mean_value, std=std_value)
+        self.calibration_summary = f"µ={mean_value:.2f} σ={std_value:.2f}"
+
+        print(f"✅ Calibración lista: {self.calibration_summary}")
+        print(f"   Rango útil: {self.calibration_profile.lower:.2f} - {self.calibration_profile.upper:.2f}\n")
+
+    def _render_calibration_screen(self, progress: float, confidence: float,
+                                   samples: int, collecting: bool, stable: bool):
+        self.screen.fill((15, 20, 35))
+
+        title = self.font.render("Calibrando baseline personal...", True, (200, 220, 255))
+        self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
+
+        instructions = [
+            "1. Mantén postura cómoda y mira un punto fijo.",
+            "2. Respira profundo con ojos cerrados y evita movimientos.",
+            "3. Cuando veas el progreso completo la calibración termina.",
+            "Pulsa ESPACIO para saltar o ESC para salir."
+        ]
+
+        for i, text in enumerate(instructions):
+            surface = self.font.render(text, True, (180, 200, 230))
+            self.screen.blit(surface, (80, 140 + i * 28))
+
+        bar_width = SCREEN_WIDTH - 160
+        bar_height = 20
+        pygame.draw.rect(self.screen, (60, 60, 80), (80, 280, bar_width, bar_height), border_radius=8)
+        inner_width = int(bar_width * progress)
+        pygame.draw.rect(self.screen, (80, 200, 140), (80, 280, inner_width, bar_height), border_radius=8)
+
+        status = f"Confianza: {confidence*100:.0f}% | Muestras: {samples}"
+        stable_text = "Estable" if stable else "Esperando señal estable"
+        collecting_text = "Capturando..." if collecting else "Preparando..."
+
+        for idx, text in enumerate([status, stable_text, collecting_text, f"Baseline: {self.calibration_summary}"]):
+            surface = self.font.render(text, True, (200, 200, 210))
+            self.screen.blit(surface, (80, 320 + idx * 28))
 
     def render(self):
         """
@@ -623,6 +876,8 @@ class NeurofeedbackGame:
         mode = "REAL" if self.use_real_data else "SIMULACIÓN"
         status = self.neurosky.connection_status if self.neurosky else "N/A"
         lines.append(f"Modo: {mode} | Estado: {status}")
+        lines.append(f"Baseline: {self.calibration_summary}")
+        lines.append(f"Ojos: {self.eye_filter.status_text()}")
         
         for i, line in enumerate(lines):
             text_surface = self.font.render(line, True, text_color)
@@ -638,6 +893,11 @@ class NeurofeedbackGame:
         print(f"   • IR > {SUN_START_THRESHOLD:.2f}  → ☀️ Sol apareciendo")
         print("\n💡 Los rayos desaparecen ANTES de que aparezca el sol")
         print("\n⌨️  Presiona ESC para salir\n")
+
+        if self.use_real_data and self.neurosky:
+            self.perform_calibration()
+            if not self.running:
+                return
         
         while self.running:
             for event in pygame.event.get():

@@ -33,7 +33,7 @@ IR_MAX = 3.0
 IR_RANGE = IR_MAX - IR_MIN
 
 # Suavizado extra para la visualización
-SMOOTHING_HISTORY = 5
+SMOOTHING_HISTORY = 10   # o incluso 15
 
 
 # ---------------------------------------------------------------------

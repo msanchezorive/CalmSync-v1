@@ -52,8 +52,8 @@ ALPHA_IDX = [2, 3]
 BETA_IDX = [4, 5]
 
 # Suavizado
-SMOOTHING_ALPHA = 0.15   # para señales EEG
-SMOOTHING_IR = 0.1       # para el IR visual
+SMOOTHING_ALPHA = 0.05   # más lento: menos reacción a cada muestra
+SMOOTHING_IR = 0.05
 
 # Calibración interna del IR
 CALIBRATION_DURATION = 10.0

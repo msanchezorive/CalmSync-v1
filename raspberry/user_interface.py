@@ -5,17 +5,21 @@ import subprocess
 # CONFIGURACIÓN GENERAL UI
 # ==============================
 
-ctk.set_appearance_mode("light")          # "light" para vibe más limpio
-ctk.set_default_color_theme("blue")       # tema base, luego afinamos colores
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
 
-APP_BG = "#F4F6FB"        # fondo general muy suave
-CARD_BG = "#FFFFFF"       # tarjetas blancas
-HEADER_BG = "#EEF2FF"     # lila muy suave
-FOOTER_BG = "#EEF2FF"
-ACCENT = "#7C8CDF"        # azul-lila calmado
-ACCENT_DARK = "#5B6AC9"
-TEXT_MAIN = "#4A4F63"
-TEXT_SOFT = "#8A92AA"
+# Paleta más sobria y menos lavada
+APP_BG = "#E5E8F3"        # fondo general
+CARD_BG = "#F9FAFF"       # tarjetas
+HEADER_BG = "#E1E5FF"
+FOOTER_BG = "#E1E5FF"
+
+ACCENT = "#5865D8"        # azul-violeta calmado
+ACCENT_SOFT = "#9AA3FF"
+ACCENT_DARK = "#4048A8"
+
+TEXT_MAIN = "#222741"
+TEXT_SOFT = "#7A819C"
 
 app = ctk.CTk()
 app.title("CalmSync")
@@ -52,7 +56,6 @@ def cerrar_app(event=None):
 # LAYOUT PRINCIPAL
 # ==============================
 
-# Frame raíz
 main_frame = ctk.CTkFrame(app, fg_color=APP_BG, corner_radius=0)
 main_frame.pack(fill="both", expand=True)
 
@@ -61,55 +64,55 @@ header_frame = ctk.CTkFrame(
     main_frame,
     fg_color=HEADER_BG,
     corner_radius=0,
-    height=150
+    height=120
 )
 header_frame.pack(fill="x", padx=0, pady=0)
 header_frame.pack_propagate(False)
 
-# Botón BPM (arriba izquierda)
+# Botón BPM
 heart_button = ctk.CTkButton(
     header_frame,
     text="BPM",
-    font=("Helvetica", 18, "bold"),
+    font=("Helvetica", 16, "bold"),
     fg_color="white",
-    hover_color="#E4E7FF",
+    hover_color="#D7DBFF",
     text_color=ACCENT_DARK,
-    width=80,
-    height=40,
-    corner_radius=20,
+    width=70,
+    height=34,
+    corner_radius=18,
     command=abrir_frecuencia_cardiaca,
     cursor="hand2",
     border_width=1,
-    border_color="#D0D4F8"
+    border_color="#C5CBFB"
 )
-heart_button.place(x=30, y=30)
+heart_button.place(x=24, y=24)
 
-# Botón X (arriba derecha)
+# Botón cerrar
 close_button = ctk.CTkButton(
     header_frame,
     text="✕",
-    font=("Helvetica", 22, "bold"),
+    font=("Helvetica", 20, "bold"),
     fg_color="white",
-    hover_color="#FFE4E4",
+    hover_color="#FFDADA",
     text_color="#FF5A5A",
-    width=50,
-    height=40,
-    corner_radius=20,
+    width=46,
+    height=34,
+    corner_radius=18,
     command=cerrar_app,
     cursor="hand2",
     border_width=1,
-    border_color="#F0B4B4"
+    border_color="#F3B0B0"
 )
-close_button.place(relx=1.0, x=-80, y=30)
+close_button.place(relx=1.0, x=-70, y=24)
 
-# Contenedor de título
+# Título centrado
 title_container = ctk.CTkFrame(header_frame, fg_color="transparent")
 title_container.pack(expand=True)
 
 title_label = ctk.CTkLabel(
     title_container,
     text="CalmSync",
-    font=("Helvetica", 60, "bold"),
+    font=("Helvetica", 52, "bold"),
     text_color=ACCENT_DARK
 )
 title_label.pack(anchor="center")
@@ -117,73 +120,65 @@ title_label.pack(anchor="center")
 subtitle_label = ctk.CTkLabel(
     title_container,
     text="Guide your mind from stormy to serene",
-    font=("Helvetica", 16),
+    font=("Helvetica", 14),
     text_color=TEXT_SOFT
 )
-subtitle_label.pack(anchor="center", pady=(4, 0))
+subtitle_label.pack(anchor="center", pady=(3, 0))
 
-# ---------- ÁREA CENTRAL CON CARDS ----------
+# ---------- ÁREA CENTRAL ----------
 center_frame = ctk.CTkFrame(main_frame, fg_color=APP_BG)
-center_frame.pack(fill="both", expand=True, padx=60, pady=(30, 20))
+center_frame.pack(fill="both", expand=True, padx=60, pady=(24, 16))
 
-# Card contenedor
-cards_frame = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=26)
-cards_frame.pack(expand=True, fill="both", padx=10, pady=10)
+cards_frame = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=22)
+cards_frame.pack(expand=True, fill="both", padx=4, pady=4)
 
-# Título del bloque
 block_title = ctk.CTkLabel(
     cards_frame,
     text="Choose your session",
-    font=("Helvetica", 20, "bold"),
+    font=("Helvetica", 18, "bold"),
     text_color=TEXT_MAIN
 )
-block_title.pack(anchor="w", padx=30, pady=(25, 5))
+block_title.pack(anchor="w", padx=28, pady=(20, 4))
 
 block_subtitle = ctk.CTkLabel(
     cards_frame,
     text="Begin with calibration for best results, then explore the different tools.",
-    font=("Helvetica", 13),
+    font=("Helvetica", 12),
     text_color=TEXT_SOFT
 )
-block_subtitle.pack(anchor="w", padx=30, pady=(0, 10))
+block_subtitle.pack(anchor="w", padx=28, pady=(0, 10))
 
-# Frame para grid de botones
 buttons_frame = ctk.CTkFrame(cards_frame, fg_color="transparent")
-buttons_frame.pack(expand=True, fill="both", padx=30, pady=20)
+buttons_frame.pack(expand=True, fill="both", padx=26, pady=18)
 
-# Datos para cada módulo: (título, emoji, descripción, función, color, tecla)
 modules = [
     (
         "Calibration",
-        "🧭",
         "Check signal quality\nand prepare your baseline.",
         abrir_calibration,
-        "#A9B8FF",
-        "1"
+        "1",
+        ACCENT
     ),
     (
         "Bars Visualizer",
-        "📊",
         "See your Alpha / Beta waves\nin real time.",
         abrir_bars_visualizer,
-        "#B3D4FF",
-        "2"
+        "2",
+        "#4CB2FF"
     ),
     (
         "Neurofeedback Game",
-        "🌦️",
         "Turn stormy skies into sunshine\nwith your mental state.",
         abrir_neurofeedback,
-        "#B9E6FF",
-        "3"
+        "3",
+        "#41C7A3"
     ),
     (
         "Stroop Game",
-        "🎯",
         "Measure cognitive control\nunder gentle challenge.",
         abrir_stroop_game,
-        "#C9E7FF",
-        "4"
+        "4",
+        "#FF9F6B"
     ),
 ]
 
@@ -192,76 +187,73 @@ buttons_frame.grid_rowconfigure((0, 1), weight=1, uniform="row")
 
 button_refs = []
 
-for idx, (title, emoji, desc, cmd, color, key) in enumerate(modules):
+for idx, (title, desc, cmd, key, color) in enumerate(modules):
     row = idx // 2
     col = idx % 2
 
     card = ctk.CTkFrame(
         buttons_frame,
-        fg_color="#FFFFFF",
-        corner_radius=24,
+        fg_color=CARD_BG,
+        corner_radius=18,
         border_width=1,
-        border_color="#E2E6F5"
+        border_color="#D6DBF0"
     )
-    card.grid(row=row, column=col, padx=18, pady=18, sticky="nsew")
+    card.grid(row=row, column=col, padx=14, pady=14, sticky="nsew")
 
-    # Contenido del card
-    card_inner = ctk.CTkFrame(card, fg_color="transparent")
-    card_inner.pack(expand=True, fill="both", padx=18, pady=18)
+    card.grid_columnconfigure(0, weight=1)
+    card.grid_columnconfigure(1, weight=0)
 
-    # Badge de número (1–4), visible incluso si no se ven emojis
+    # Columna izquierda: badge + textos
+    left = ctk.CTkFrame(card, fg_color="transparent")
+    left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=14)
+
     badge = ctk.CTkLabel(
-        card_inner,
+        left,
         text=key,
-        font=("Helvetica", 16, "bold"),
+        font=("Helvetica", 14, "bold"),
         text_color="white",
-        fg_color=ACCENT,
+        fg_color=color,
         corner_radius=999,
-        width=28,
-        height=28
+        width=26,
+        height=26
     )
     badge.pack(anchor="w")
 
-    # Emoji (si la fuente los soporta; si no, simplemente no se verá pero no rompe nada)
-    emoji_label = ctk.CTkLabel(
-        card_inner,
-        text=emoji,
-        font=("Helvetica", 26),
-        text_color=TEXT_MAIN
-    )
-    emoji_label.pack(anchor="w", pady=(4, 0))
-
     title_label = ctk.CTkLabel(
-        card_inner,
+        left,
         text=title,
-        font=("Helvetica", 22, "bold"),
+        font=("Helvetica", 18, "bold"),
         text_color=TEXT_MAIN
     )
-    title_label.pack(anchor="w", pady=(2, 0))
+    title_label.pack(anchor="w", pady=(4, 0))
 
     desc_label = ctk.CTkLabel(
-        card_inner,
+        left,
         text=desc,
-        font=("Helvetica", 13),
+        font=("Helvetica", 12),
         text_color=TEXT_SOFT,
         justify="left"
     )
-    desc_label.pack(anchor="w", pady=(3, 16))
+    desc_label.pack(anchor="w", pady=(2, 0))
 
-    # Botón principal del módulo
+    # Columna derecha: botón compacto
+    right = ctk.CTkFrame(card, fg_color="transparent")
+    right.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=14)
+
     btn = ctk.CTkButton(
-        card_inner,
-        text=f"Start   ({key})",
-        font=("Helvetica", 15, "bold"),
+        right,
+        text=f"Start  ({key})",
+        font=("Helvetica", 13, "bold"),
         text_color="white",
         fg_color=color,
         hover_color=ACCENT_DARK,
-        corner_radius=20,
-        height=38,
+        corner_radius=18,
+        width=120,          # evita barra larguísima
+        height=34,
         command=cmd,
         cursor="hand2"
     )
-    btn.pack(anchor="e", pady=(0, 0))
+    btn.pack(anchor="e")
 
     button_refs.append((btn, key, cmd))
 
@@ -270,19 +262,18 @@ footer_frame = ctk.CTkFrame(
     main_frame,
     fg_color=FOOTER_BG,
     corner_radius=0,
-    height=80
+    height=70
 )
 footer_frame.pack(fill="x", side="bottom", padx=0, pady=0)
 footer_frame.pack_propagate(False)
 
 footer_inner = ctk.CTkFrame(footer_frame, fg_color="transparent")
-footer_inner.pack(expand=True, fill="both", padx=30)
+footer_inner.pack(expand=True, fill="both", padx=26)
 
-# Parte izquierda del footer (texto marca)
 footer_label1 = ctk.CTkLabel(
     footer_inner,
     text="Affordable Wellness · CalmSync",
-    font=("Helvetica", 13, "bold"),
+    font=("Helvetica", 12, "bold"),
     text_color=TEXT_MAIN
 )
 footer_label1.pack(anchor="w")
@@ -290,16 +281,15 @@ footer_label1.pack(anchor="w")
 footer_label2 = ctk.CTkLabel(
     footer_inner,
     text="Your stress-free life starts here.",
-    font=("Helvetica", 12),
+    font=("Helvetica", 11),
     text_color=TEXT_SOFT
 )
-footer_label2.pack(anchor="w", pady=(2, 0))
+footer_label2.pack(anchor="w", pady=(1, 0))
 
-# Hint de teclado a la derecha
 footer_hint = ctk.CTkLabel(
     footer_inner,
     text="Use 1–4 to open modules · Esc to exit",
-    font=("Helvetica", 12),
+    font=("Helvetica", 11),
     text_color=TEXT_SOFT
 )
 footer_hint.pack(anchor="e")
@@ -309,11 +299,9 @@ footer_hint.pack(anchor="e")
 # ==============================
 
 def on_key(event):
-    # Atajos 1–4 para abrir módulos
     for btn, key, cmd in button_refs:
         if event.char == key:
             cmd()
-    # Esc para cerrar app
     if event.keysym == "Escape":
         cerrar_app()
 

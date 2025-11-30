@@ -14,7 +14,8 @@ from udp import EEGClient
 # CONSTANTES GENERALES / CONFIG
 # ---------------------------------------------------------------------
 
-ASSETS_PATH = 'assets'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_PATH = os.path.join(BASE_DIR, 'assets')
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 30

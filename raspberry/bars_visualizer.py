@@ -23,8 +23,7 @@ COLOR_BETA = (255, 150, 100)   # Naranja
 COLOR_TEXT = (255, 255, 255)
 COLOR_GRID = (50, 50, 70)
 
-# Escala de barras
-MAX_POWER_DISPLAY = 50000  # Ajusta según los valores típicos que veas
+# Ancho de barras
 BAR_WIDTH = 80
 BAR_SPACING = 50
 
@@ -89,6 +88,12 @@ class EEGBarsVisualizer:
         # Histórico para suavizado visual
         self.alpha_history = deque(maxlen=SMOOTHING_HISTORY)
         self.beta_history = deque(maxlen=SMOOTHING_HISTORY)
+
+        # Escalado dinámico de las barras
+        self.max_alpha_seen = 1.0
+        self.max_beta_seen = 1.0
+        # Escala mínima para que siempre se vea algo aunque los valores sean bajos
+        self.min_display_scale = 1000.0
         
         self.running = True
     
@@ -147,6 +152,10 @@ class EEGBarsVisualizer:
         # Suavizado visual adicional
         self.alpha_history.append(self.alpha)
         self.beta_history.append(self.beta)
+
+        # Actualizar máximos vistos para autoescalado
+        self.max_alpha_seen = max(self.max_alpha_seen, self.alpha)
+        self.max_beta_seen = max(self.max_beta_seen, self.beta)
     
     def get_smoothed_values(self) -> Tuple[float, float]:
         """Retorna valores suavizados para animación fluida."""
@@ -164,6 +173,8 @@ class EEGBarsVisualizer:
         """Dibuja una barra vertical animada."""
         # Calcula altura de la barra
         bar_height_max = SCREEN_HEIGHT - 150  # Espacio para labels
+        if max_value <= 0:
+            max_value = 1.0
         bar_height = (value / max_value) * bar_height_max
         bar_height = max(0, min(bar_height, bar_height_max))
         
@@ -257,9 +268,14 @@ class EEGBarsVisualizer:
         # Dibuja barras
         alpha_x = SCREEN_WIDTH // 3
         beta_x = 2 * SCREEN_WIDTH // 3
+
+        # Escalado dinámico: usamos el máximo observado * 1.2,
+        # con una escala mínima para que siempre se vea algo.
+        alpha_max = max(self.min_display_scale, self.max_alpha_seen * 1.2)
+        beta_max = max(self.min_display_scale, self.max_beta_seen * 1.2)
         
-        self.draw_bar(alpha_x, alpha_smooth, MAX_POWER_DISPLAY, COLOR_ALPHA, "ALPHA")
-        self.draw_bar(beta_x, beta_smooth, MAX_POWER_DISPLAY, COLOR_BETA, "BETA")
+        self.draw_bar(alpha_x, alpha_smooth, alpha_max, COLOR_ALPHA, "ALPHA")
+        self.draw_bar(beta_x, beta_smooth, beta_max, COLOR_BETA, "BETA")
         
         # Indicador IR
         self.draw_ir_indicator(self.alpha, self.beta)

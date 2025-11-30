@@ -30,8 +30,7 @@ app.configure(fg_color=APP_BG)
 # ==============================
 
 def abrir_frecuencia_cardiaca():
-    # Ojo: mantenemos el nombre del archivo tal y como lo tienes
-    subprocess.Popen(["python", "fecuencia_cardiaca.py"])
+    subprocess.Popen(["python", "frecuencia_cardiaca.py"])
 
 def abrir_calibration():
     subprocess.Popen(["python", "initial_calibration.py"])
@@ -62,7 +61,7 @@ header_frame = ctk.CTkFrame(
     main_frame,
     fg_color=HEADER_BG,
     corner_radius=0,
-    height=140
+    height=150
 )
 header_frame.pack(fill="x", padx=0, pady=0)
 header_frame.pack_propagate(False)
@@ -122,15 +121,6 @@ subtitle_label = ctk.CTkLabel(
     text_color=TEXT_SOFT
 )
 subtitle_label.pack(anchor="center", pady=(4, 0))
-
-# Pequeño hint de teclado
-hint_label = ctk.CTkLabel(
-    header_frame,
-    text="Use 1–4 to open modules · Esc to exit",
-    font=("Helvetica", 12),
-    text_color=TEXT_SOFT
-)
-hint_label.place(relx=0.5, rely=1.0, x=0, y=-10, anchor="s")
 
 # ---------- ÁREA CENTRAL CON CARDS ----------
 center_frame = ctk.CTkFrame(main_frame, fg_color=APP_BG)
@@ -219,12 +209,27 @@ for idx, (title, emoji, desc, cmd, color, key) in enumerate(modules):
     card_inner = ctk.CTkFrame(card, fg_color="transparent")
     card_inner.pack(expand=True, fill="both", padx=18, pady=18)
 
+    # Badge de número (1–4), visible incluso si no se ven emojis
+    badge = ctk.CTkLabel(
+        card_inner,
+        text=key,
+        font=("Helvetica", 16, "bold"),
+        text_color="white",
+        fg_color=ACCENT,
+        corner_radius=999,
+        width=28,
+        height=28
+    )
+    badge.pack(anchor="w")
+
+    # Emoji (si la fuente los soporta; si no, simplemente no se verá pero no rompe nada)
     emoji_label = ctk.CTkLabel(
         card_inner,
         text=emoji,
-        font=("Helvetica", 34)
+        font=("Helvetica", 26),
+        text_color=TEXT_MAIN
     )
-    emoji_label.pack(anchor="w")
+    emoji_label.pack(anchor="w", pady=(4, 0))
 
     title_label = ctk.CTkLabel(
         card_inner,
@@ -232,7 +237,7 @@ for idx, (title, emoji, desc, cmd, color, key) in enumerate(modules):
         font=("Helvetica", 22, "bold"),
         text_color=TEXT_MAIN
     )
-    title_label.pack(anchor="w", pady=(5, 0))
+    title_label.pack(anchor="w", pady=(2, 0))
 
     desc_label = ctk.CTkLabel(
         card_inner,
@@ -273,6 +278,7 @@ footer_frame.pack_propagate(False)
 footer_inner = ctk.CTkFrame(footer_frame, fg_color="transparent")
 footer_inner.pack(expand=True, fill="both", padx=30)
 
+# Parte izquierda del footer (texto marca)
 footer_label1 = ctk.CTkLabel(
     footer_inner,
     text="Affordable Wellness · CalmSync",
@@ -288,6 +294,15 @@ footer_label2 = ctk.CTkLabel(
     text_color=TEXT_SOFT
 )
 footer_label2.pack(anchor="w", pady=(2, 0))
+
+# Hint de teclado a la derecha
+footer_hint = ctk.CTkLabel(
+    footer_inner,
+    text="Use 1–4 to open modules · Esc to exit",
+    font=("Helvetica", 12),
+    text_color=TEXT_SOFT
+)
+footer_hint.pack(anchor="e")
 
 # ==============================
 # BINDINGS TECLADO

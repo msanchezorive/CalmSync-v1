@@ -2,64 +2,16 @@ import pygame
 import sys
 import random
 import os
-import threading
 import time
 import statistics
-import serial
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
-# Importamos las funciones del parser (¡SIN MODIFICAR!)
-from generic_parser import parse_packet, extract_data_from_payload
+# NUEVO: leemos datos del MindWave a través del servidor TCP de udp.py
+from udp import EEGClient
 
 # ---------------------------------------------------------------------
-# CONFIGURACIÓN DEL NEUROSKY
-# ---------------------------------------------------------------------
-
-# ¡CAMBIA ESTO SEGÚN TU SISTEMA!
-NEUROSKY_PORT = "/dev/rfcomm0"  # o "COM10" en Windows
-NEUROSKY_BAUD = 57600
-
-# Códigos de NeuroSky
-CODE_HANDLERS_EEG = {0x83: 'eeg_power'}
-CODE_HANDLERS_ATT_MED = {0x04: 'attention', 0x05: 'meditation'}
-
-# Índices de bandas
-ALPHA_IDX = [2, 3]  # Low-Alpha, High-Alpha
-BETA_IDX = [4, 5]   # Low-Beta, High-Beta
-
-# Suavizado
-SMOOTHING_ALPHA = 0.15
-SMOOTHING_IR = 0.1
-
-# Calibración personalizada
-CALIBRATION_DURATION = 10.0          # Segundos de captura estable
-CALIBRATION_STABLE_SECONDS = 2.0      # Tiempo mínimo con señal estable antes de registrar
-CALIBRATION_MIN_CONFIDENCE = 0.65     # Confianza mínima para usar muestras
-CALIBRATION_MIN_SAMPLES = 90          # Requiere ~9 segundos a 10 Hz
-CALIBRATION_STD_RANGE = 2.0           # Rango ±STD usado para normalizar
-CALIBRATION_MIN_STD = 0.02            # Evita divisiones con desviación casi cero
-
-# Limitadores de transición IR (evita saltos pero mantiene respuesta)
-IR_MAX_STEP_UP = 0.06   # Relajación rápida al cerrar ojos
-IR_MAX_STEP_DOWN = 0.08 # Estrés al abrir ojos sin picos desagradables
-
-# Filtro de artefactos por parpadeo/ojos
-EYE_FAST_ALPHA = 0.4
-EYE_SLOW_ALPHA = 0.05
-EYE_SPIKE_THRESHOLD = 1.7
-EYE_DROP_THRESHOLD = 0.65
-EYE_MIN_DELTA = 0.3
-EYE_SUPPRESSION_GAIN = 0.45
-EYE_SUPPRESSION_DECAY = 1.4  # segundos para volver a 0
-
-# MEJORA: Sistema de confianza gradual en lugar de umbral abrupto
-CONFIDENCE_INCREASE_RATE = 0.05  # Qué tan rápido sube la confianza
-CONFIDENCE_DECREASE_RATE = 0.02  # Qué tan rápido baja la confianza
-MIN_CONFIDENCE_THRESHOLD = 0.3   # Confianza mínima para empezar a usar datos
-
-# ---------------------------------------------------------------------
-# CONFIGURATION & CONSTANTS
+# CONSTANTES GENERALES / CONFIG
 # ---------------------------------------------------------------------
 
 ASSETS_PATH = 'assets'
@@ -82,150 +34,49 @@ IR_MIN = 0.3
 IR_MAX = 3.0
 IR_RANGE = IR_MAX - IR_MIN
 
-# NUEVO: Configuración de transición por etapas
-LIGHTNING_END_THRESHOLD = 0.50    # Los rayos desaparecen completamente aquí
-SUN_START_THRESHOLD = 0.55        # El sol empieza a aparecer aquí
-TRANSITION_OVERLAP = 0.05         # Pequeño overlap para suavidad
+# Transición por etapas
+LIGHTNING_END_THRESHOLD = 0.50    # A partir de aquí no hay rayos
+SUN_START_THRESHOLD = 0.55        # A partir de aquí empieza a aparecer el sol
+TRANSITION_OVERLAP = 0.05         # Pequeño solapamiento visual
 
-# Configuración de rayos
+# Configuración rayos
 LIGHTNING_DURATION_FRAMES = 5
 LIGHTNING_MIN_INTERVAL = 30
 LIGHTNING_MAX_INTERVAL = 90
 
+# Índices EEG (coinciden con udp.py)
+ALPHA_IDX = [2, 3]
+BETA_IDX = [4, 5]
 
-# ---------------------------------------------------------------------
-# LECTOR DE NEUROSKY CON SISTEMA DE CONFIANZA GRADUAL
-# ---------------------------------------------------------------------
+# Suavizado
+SMOOTHING_ALPHA = 0.15   # para señales EEG
+SMOOTHING_IR = 0.1       # para el IR visual
 
-class NeuroSkyReader:
-    """
-    MEJORA: Usa sistema de confianza gradual para evitar cambios abruptos.
-    """
-    
-    def __init__(self, port: str, baud: int):
-        self.port = port
-        self.baud = baud
-        
-        # Estado actual
-        self.alpha = 0.0
-        self.beta = 0.0
-        self.attention = 0.0
-        self.meditation = 0.0
-        self.confidence = 0.0  # NUEVO: 0.0 = sin confianza, 1.0 = total confianza
-        
-        # Control del hilo
-        self.running = False
-        self.thread: Optional[threading.Thread] = None
-        self.serial_port: Optional[serial.Serial] = None
-        self.connection_status = "Desconectado"
-        
-        # Lock para acceso thread-safe
-        self.lock = threading.Lock()
-    
-    def get_alpha_from_payload(self, payload: bytes) -> Optional[float]:
-        """Extrae Alpha del payload."""
-        data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
-        if 'eeg_power' in data:
-            powers = data['eeg_power']
-            alpha_val = sum([powers[i] for i in ALPHA_IDX]) / len(ALPHA_IDX)
-            return alpha_val
-        return None
-    
-    def get_beta_from_payload(self, payload: bytes) -> Optional[float]:
-        """Extrae Beta del payload."""
-        data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
-        if 'eeg_power' in data:
-            powers = data['eeg_power']
-            beta_val = sum([powers[i] for i in BETA_IDX]) / len(BETA_IDX)
-            return beta_val
-        return None
-    
-    def get_attention_meditation(self, payload: bytes) -> Tuple[Optional[float], Optional[float]]:
-        """Extrae Atención y Meditación."""
-        data = extract_data_from_payload(payload, CODE_HANDLERS_ATT_MED)
-        att = data.get('attention')
-        med = data.get('meditation')
-        return att, med
-    
-    def _read_loop(self):
-        """
-        Bucle de lectura con sistema de confianza gradual.
-        """
-        try:
-            self.serial_port = serial.Serial(self.port, self.baud, timeout=1)
-            self.connection_status = "Conectado"
-            print(f"✅ NeuroSky conectado en {self.port}")
-            
-            while self.running:
-                payload = parse_packet(self.serial_port)
-                
-                if payload is None:
-                    continue
-                
-                # Extrae todos los datos
-                raw_alpha = self.get_alpha_from_payload(payload)
-                raw_beta = self.get_beta_from_payload(payload)
-                att, med = self.get_attention_meditation(payload)
-                
-                with self.lock:
-                    # Actualiza atención y meditación siempre
-                    if att is not None:
-                        self.attention = (SMOOTHING_ALPHA * att + 
-                                        (1 - SMOOTHING_ALPHA) * self.attention)
-                    
-                    if med is not None:
-                        self.meditation = (SMOOTHING_ALPHA * med + 
-                                         (1 - SMOOTHING_ALPHA) * self.meditation)
-                    
-                    # MEJORA: Sistema de confianza gradual
-                    # Si atención O meditación son buenos, aumenta confianza
-                    if self.attention >= 20 or self.meditation >= 15:
-                        self.confidence = min(1.0, self.confidence + CONFIDENCE_INCREASE_RATE)
-                    else:
-                        # Si no, disminuye confianza gradualmente
-                        self.confidence = max(0.0, self.confidence - CONFIDENCE_DECREASE_RATE)
-                    
-                    # Actualiza Alpha/Beta usando sistema de mezcla ponderada
-                    if raw_alpha is not None and raw_beta is not None:
-                        # Calcula nuevos valores suavizados
-                        new_alpha = (SMOOTHING_ALPHA * raw_alpha + 
-                                    (1 - SMOOTHING_ALPHA) * self.alpha)
-                        new_beta = (SMOOTHING_ALPHA * raw_beta + 
-                                   (1 - SMOOTHING_ALPHA) * self.beta)
-                        
-                        # Mezcla entre valores antiguos y nuevos según confianza
-                        # confidence=0 → usa valores antiguos (ignora nuevos datos)
-                        # confidence=1 → usa valores nuevos (confía en datos)
-                        self.alpha = self.alpha * (1 - self.confidence) + new_alpha * self.confidence
-                        self.beta = self.beta * (1 - self.confidence) + new_beta * self.confidence
-        
-        except serial.SerialException as e:
-            self.connection_status = f"Error: {e}"
-            print(f"❌ Error de conexión: {e}")
-        
-        finally:
-            if self.serial_port and self.serial_port.is_open:
-                self.serial_port.close()
-            self.connection_status = "Desconectado"
-    
-    def start(self):
-        """Inicia la lectura en segundo plano."""
-        if not self.running:
-            self.running = True
-            self.thread = threading.Thread(target=self._read_loop, daemon=True)
-            self.thread.start()
-    
-    def stop(self):
-        """Detiene la lectura."""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=2)
-    
-    def get_values(self) -> Tuple[float, float, float, float, float]:
-        """Devuelve alpha, beta, attention, meditation, confidence."""
-        with self.lock:
-            return self.alpha, self.beta, self.attention, self.meditation, self.confidence
+# Calibración interna del IR
+CALIBRATION_DURATION = 10.0
+CALIBRATION_STABLE_SECONDS = 2.0
+CALIBRATION_MIN_CONFIDENCE = 0.65
+CALIBRATION_MIN_SAMPLES = 90
+CALIBRATION_STD_RANGE = 2.0
+CALIBRATION_MIN_STD = 0.02
 
+# Limitadores de transición IR
+IR_MAX_STEP_UP = 0.06
+IR_MAX_STEP_DOWN = 0.08
+
+# Filtro ojos
+EYE_FAST_ALPHA = 0.4
+EYE_SLOW_ALPHA = 0.05
+EYE_SPIKE_THRESHOLD = 1.7
+EYE_DROP_THRESHOLD = 0.65
+EYE_MIN_DELTA = 0.3
+EYE_SUPPRESSION_GAIN = 0.45
+EYE_SUPPRESSION_DECAY = 1.4  # s
+
+# Sistema de confianza gradual
+CONFIDENCE_INCREASE_RATE = 0.05
+CONFIDENCE_DECREASE_RATE = 0.02
+MIN_CONFIDENCE_THRESHOLD = 0.3   # (no lo usamos como corte duro, pero por si quieres)
 
 # ---------------------------------------------------------------------
 # DATA CLASSES
@@ -267,7 +118,7 @@ class GameState:
 
 @dataclass
 class BaselineProfile:
-    """Perfil estadístico de la persona para normalizar su IR."""
+    """Perfil estadístico personal para normalizar IR."""
     mean: float
     std: float
 
@@ -410,36 +261,28 @@ class LightningSystem:
         self.next_spawn_interval = LIGHTNING_MIN_INTERVAL
     
     def update(self, stress_level: float, ir_normalized: float):
-        """
-        MEJORA: Usa ir_normalized para calcular cuándo desaparecen los rayos.
-        
-        Args:
-            stress_level: 1.0 - ir_normalized (para compatibilidad)
-            ir_normalized: Valor IR normalizado (0.0 = estresado, 1.0 = relajado)
-        """
+        # Elimina rayos expirados
         self.lightnings = [l for l in self.lightnings if l.update()]
         
-        # MEJORA: Los rayos solo aparecen si IR < LIGHTNING_END_THRESHOLD
+        # Si IR ya es suficientemente alto, no hay rayos
         if ir_normalized >= LIGHTNING_END_THRESHOLD:
             self.frames_since_last = 0
             return
         
-        # Calcula intensidad de rayos según IR
-        # ir=0.0 → intensidad=1.0 (muchos rayos)
-        # ir=0.5 → intensidad=0.0 (sin rayos)
+        # Intensidad de rayos según IR
         lightning_intensity = max(0.0, (LIGHTNING_END_THRESHOLD - ir_normalized) / LIGHTNING_END_THRESHOLD)
-        
-        if lightning_intensity < 0.05:  # Umbral mínimo
+        if lightning_intensity < 0.05:
             self.frames_since_last = 0
             return
         
         self.frames_since_last += 1
         
-        # Frecuencia de rayos basada en intensidad
+        # Intervalo entre rayos según intensidad
         intensity_squared = lightning_intensity ** 2
         interval_range = LIGHTNING_MAX_INTERVAL - LIGHTNING_MIN_INTERVAL
-        self.next_spawn_interval = int(LIGHTNING_MAX_INTERVAL - 
-                                       (interval_range * intensity_squared))
+        self.next_spawn_interval = int(
+            LIGHTNING_MAX_INTERVAL - (interval_range * intensity_squared)
+        )
         
         if self.frames_since_last >= self.next_spawn_interval:
             self.spawn_lightning()
@@ -456,17 +299,12 @@ class LightningSystem:
         ))
     
     def draw(self, effects: VisualEffects, ir_normalized: float):
-        """
-        MEJORA: Opacidad de rayos desaparece gradualmente antes del umbral.
-        """
         if ir_normalized >= LIGHTNING_END_THRESHOLD:
             return
         
-        # Calcula opacidad máxima según proximidad al umbral
         max_opacity = max(0.0, (LIGHTNING_END_THRESHOLD - ir_normalized) / LIGHTNING_END_THRESHOLD)
         
         for lightning in self.lightnings:
-            # Opacidad combinada: frames restantes + proximidad a umbral
             frame_opacity = min(1.0, lightning.frames_remaining / LIGHTNING_DURATION_FRAMES)
             final_opacity = frame_opacity * max_opacity
             
@@ -537,7 +375,7 @@ class CloudSystem:
 
 
 # ---------------------------------------------------------------------
-# MAIN GAME
+# JUEGO PRINCIPAL
 # ---------------------------------------------------------------------
 
 class NeurofeedbackGame:
@@ -548,46 +386,48 @@ class NeurofeedbackGame:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 24)
 
-        # Initialize systems
+        # Sistemas visuales
         self.assets = AssetManager()
         self.effects = VisualEffects(self.screen)
 
-        # Load assets
+        # Cargar assets
         self.bg_image = self.assets.load_image('neurofeedback_scenery/paisaje.jpg')
         self.sun_image = self.assets.load_image('neurofeedback_scenery/sol_png.png')
         lightning_image = self.assets.load_image('neurofeedback_scenery/rayo_png.png')
         cloud_image = self.assets.load_image('neurofeedback_scenery/nube_png.png')
 
-        # Escala el sol
+        # Escalado del sol
         self.sun_image = pygame.transform.scale(self.sun_image, (150, 150))
 
-        # Initialize game systems
+        # Sistemas de clima
         self.rain = RainSystem()
         self.clouds = CloudSystem(cloud_image)
         self.lightning = LightningSystem(lightning_image)
 
-        # Inicializa NeuroSky
+        # EEG: ahora a través de udp.EEGClient
         self.use_real_data = use_real_data
-        self.neurosky: Optional[NeuroSkyReader] = None
-        
+        self.client: Optional[EEGClient] = None
+        self.connection_status = "N/A"
+
         if use_real_data:
             try:
-                self.neurosky = NeuroSkyReader(NEUROSKY_PORT, NEUROSKY_BAUD)
-                self.neurosky.start()
-                print("🧠 Modo: Datos reales del NeuroSky")
+                self.client = EEGClient()
+                self.client.start()
+                self.connection_status = "Conectando al servidor EEG..."
+                print("🧠 Modo: Datos reales vía udp.EEGClient")
             except Exception as e:
-                print(f"⚠️ No se pudo conectar al NeuroSky: {e}")
+                print(f"⚠️ No se pudo inicializar EEGClient: {e}")
                 print("🎮 Cambiando a modo simulación")
                 self.use_real_data = False
         else:
             print("🎮 Modo: Simulación de datos")
 
-        # Datos de simulación
+        # Datos simulación (por si no hay sensor)
         self.alpha_data = [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0]
         self.beta_data = [9.0, 8.0, 7.0, 6.0, 5.0, 4.5, 4.0, 3.5, 3.0]
         self.data_index = 0
 
-        # Game state
+        # Estado de juego
         self.state = GameState(
             alpha=3.0,
             beta=9.0,
@@ -606,6 +446,8 @@ class NeurofeedbackGame:
         if not self.use_real_data:
             self.calibration_summary = "Global (simulación)"
         self.eye_filter = EyeArtifactFilter()
+
+    # ------------------------ LÓGICA IR ------------------------
 
     def _compute_ir_ratio(self, alpha: float, beta: float) -> float:
         beta = max(0.1, beta)
@@ -629,49 +471,107 @@ class NeurofeedbackGame:
             delta = max(delta, -IR_MAX_STEP_DOWN)
         return previous + delta
 
-    def update_data(self):
-        if self.use_real_data and self.neurosky:
-            alpha, beta, att, med, conf = self.neurosky.get_values()
-            self.state.alpha = alpha
-            self.state.beta = beta
-            self.state.attention = att
-            self.state.meditation = med
-            self.state.confidence = conf
-        else:
-            self.state.frame_count += 1
-            if self.state.frame_count >= FRAMES_PER_STEP:
-                self.state.frame_count = 0
-                self.data_index = (self.data_index + 1) % len(self.alpha_data)
-            
-            self.state.alpha = self.alpha_data[self.data_index]
-            self.state.beta = self.beta_data[self.data_index]
-            self.state.attention = 50.0
-            self.state.meditation = 50.0
-            self.state.confidence = 1.0
+    # ------------------------ DATOS EEG ------------------------
 
+    def _update_from_real_eeg(self):
+        """
+        Actualiza self.state usando datos de EEGClient
+        y reconstruye el sistema de confianza gradual.
+        """
+        if not self.client:
+            return
+
+        data = self.client.get_data()
+        raw_alpha = data.get("alpha", 0.0)
+        raw_beta = data.get("beta", 0.0)
+        raw_att = float(data.get("attention", 0))
+        raw_med = float(data.get("meditation", 0))
+        signal_quality = data.get("signal_quality", 200)
+
+        # Atención y meditación suavizadas
+        self.state.attention = (SMOOTHING_ALPHA * raw_att +
+                                (1 - SMOOTHING_ALPHA) * self.state.attention)
+        self.state.meditation = (SMOOTHING_ALPHA * raw_med +
+                                 (1 - SMOOTHING_ALPHA) * self.state.meditation)
+
+        # Confianza basada en atención/meditación (igual que antes)
+        if self.state.attention >= 20 or self.state.meditation >= 15:
+            self.state.confidence = min(1.0, self.state.confidence + CONFIDENCE_INCREASE_RATE)
+        else:
+            self.state.confidence = max(0.0, self.state.confidence - CONFIDENCE_DECREASE_RATE)
+
+        # Alpha/Beta suavizados y ponderados por confianza
+        new_alpha = (SMOOTHING_ALPHA * raw_alpha +
+                     (1 - SMOOTHING_ALPHA) * self.state.alpha)
+        new_beta = (SMOOTHING_ALPHA * raw_beta +
+                    (1 - SMOOTHING_ALPHA) * self.state.beta)
+
+        c = self.state.confidence
+        self.state.alpha = self.state.alpha * (1 - c) + new_alpha * c
+        self.state.beta = self.state.beta * (1 - c) + new_beta * c
+
+        # Estado de conexión (texto)
+        if signal_quality >= 200:
+            self.connection_status = "Sin señal"
+        elif signal_quality > 50:
+            self.connection_status = f"Connected (ajusta sensor, ruido={signal_quality})"
+        else:
+            self.connection_status = "Conectado (buena señal)"
+
+    def _update_from_simulation(self):
+        self.state.frame_count += 1
+        if self.state.frame_count >= FRAMES_PER_STEP:
+            self.state.frame_count = 0
+            self.data_index = (self.data_index + 1) % len(self.alpha_data)
+        
+        self.state.alpha = self.alpha_data[self.data_index]
+        self.state.beta = self.beta_data[self.data_index]
+        self.state.attention = 50.0
+        self.state.meditation = 50.0
+        self.state.confidence = 1.0
+
+    def update_data(self):
+        """Actualiza alpha/beta/IR y aplica filtro de ojos."""
+        if self.use_real_data and self.client:
+            self._update_from_real_eeg()
+        else:
+            self._update_from_simulation()
+
+        # Filtro de artefactos de ojos
         self.eye_filter.update_alpha(self.state.alpha)
         
+        # IR normalizado (antes de filtro ojos)
         self.state.ir_normalized = self.calculate_ir_normalized(
             self.state.alpha, self.state.beta
         )
+
+        # Filtro de ojos sobre el IR
         filtered_ir = self.eye_filter.apply(self.state.ir_normalized)
         
+        # Suavizado + limitadores de transición
         blended = (SMOOTHING_IR * filtered_ir + 
                    (1 - SMOOTHING_IR) * self.state.ir_smoothed)
         self.state.ir_smoothed = self._limit_ir_transition(self.state.ir_smoothed, blended)
 
+    # ------------------------ CALIBRACIÓN INTERNA IR ------------------------
+
     def perform_calibration(self):
-        if not self.use_real_data or not self.neurosky:
+        """
+        Calibración interna del IR (distinta de initial_calibration.py).
+        Ahora lee los datos de EEGClient a través de update_data().
+        """
+        if not self.use_real_data or not self.client:
             return
 
-        print("\n🧘 Iniciando calibración personalizada...")
-        print("   Mantén postura cómoda, relaja los hombros y respira profundo.\n")
+        print("\n🧘 Iniciando calibración personalizada de IR...")
+        print("   Si ya has hecho la 'initial calibration', esto ajusta solo tu rango α/β.\n")
 
         samples: List[float] = []
         stable_start: Optional[float] = None
         collection_start: Optional[float] = None
 
         while self.running:
+            # Eventos pygame
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -681,13 +581,19 @@ class NeurofeedbackGame:
                         self.running = False
                         return
                     if event.key == pygame.K_SPACE:
-                        print("⏭️  Calibración omitida por el usuario.")
+                        print("⏭️  Calibración IR omitida por el usuario.")
                         self.calibration_summary = "Manual"
                         return
 
-            alpha, beta, _, _, confidence = self.neurosky.get_values()
+            # Actualiza datos desde EEG
+            self.update_data()
+
+            alpha = self.state.alpha
+            beta = self.state.beta
+            confidence = self.state.confidence
             ratio = self._compute_ir_ratio(alpha, beta)
 
+            # Lógica de recogida de muestras (similar a antes)
             collecting = False
             if confidence >= CALIBRATION_MIN_CONFIDENCE:
                 if stable_start is None:
@@ -731,7 +637,7 @@ class NeurofeedbackGame:
                 break
 
         if not samples:
-            print("⚠️ No se pudo calcular baseline. Se usa mapeo genérico.")
+            print("⚠️ No se pudo calcular baseline de IR. Se usa mapeo genérico.")
             self.calibration_summary = "Fallback"
             return
 
@@ -747,19 +653,19 @@ class NeurofeedbackGame:
         self.calibration_profile = BaselineProfile(mean=mean_value, std=std_value)
         self.calibration_summary = f"µ={mean_value:.2f} σ={std_value:.2f}"
 
-        print(f"✅ Calibración lista: {self.calibration_summary}")
+        print(f"✅ Calibración IR lista: {self.calibration_summary}")
         print(f"   Rango útil: {self.calibration_profile.lower:.2f} - {self.calibration_profile.upper:.2f}\n")
 
     def _render_calibration_screen(self, progress: float, confidence: float,
                                    samples: int, collecting: bool, stable: bool):
         self.screen.fill((15, 20, 35))
 
-        title = self.font.render("Calibrando baseline personal...", True, (200, 220, 255))
+        title = self.font.render("Calibrando baseline personal (IR α/β)...", True, (200, 220, 255))
         self.screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
 
         instructions = [
             "1. Mantén postura cómoda y mira un punto fijo.",
-            "2. Respira profundo con ojos cerrados y evita movimientos.",
+            "2. Respira profundo y relaja los hombros.",
             "3. Cuando veas el progreso completo la calibración termina.",
             "Pulsa ESPACIO para saltar o ESC para salir."
         ]
@@ -778,75 +684,59 @@ class NeurofeedbackGame:
         stable_text = "Estable" if stable else "Esperando señal estable"
         collecting_text = "Capturando..." if collecting else "Preparando..."
 
-        for idx, text in enumerate([status, stable_text, collecting_text, f"Baseline: {self.calibration_summary}"]):
+        for idx, text in enumerate([status, stable_text, collecting_text, f"Baseline IR: {self.calibration_summary}"]):
             surface = self.font.render(text, True, (200, 200, 210))
             self.screen.blit(surface, (80, 320 + idx * 28))
 
+    # ------------------------ RENDERIZADO PRINCIPAL ------------------------
+
     def render(self):
         """
-        ORDEN DE RENDERIZADO CON TRANSICIÓN POR ETAPAS:
-        
-        Etapa 1 (IR 0.0-0.5): Rayos fuertes → desapareciendo, sin sol
-        Etapa 2 (IR 0.5-0.55): Transición, rayos se van
-        Etapa 3 (IR 0.55-1.0): Sin rayos, sol apareciendo → brillante
-        
-        1. Cielo
-        2. Paisaje (suelo)
-        3. SOL (con aparición retrasada)
-        4. Nubes
-        5. Lluvia
-        6. Rayos (desaparecen primero)
-        7. Capa oscura
-        8. Info
+        Orden de dibujo (cielo → paisaje → sol → nubes → lluvia → rayos → overlay → HUD).
         """
         ir_norm = self.state.ir_smoothed
         stress_level = 1.0 - ir_norm
 
-        # MEJORA: Cálculo de opacidad del sol con inicio retrasado
+        # Opacidad del sol
         if ir_norm < SUN_START_THRESHOLD:
-            # Sol no aparece hasta que IR > SUN_START_THRESHOLD
             sun_opacity = 0.0
         else:
-            # Sol aparece gradualmente después del umbral
-            # ir=0.55 → 0%, ir=1.0 → 100%
             sun_progress = (ir_norm - SUN_START_THRESHOLD) / (1.0 - SUN_START_THRESHOLD)
-            sun_opacity = sun_progress ** 0.5  # Raíz cuadrada para aparición más rápida
+            sun_opacity = sun_progress ** 0.5
 
-        # Otros parámetros visuales
         cloud_density = stress_level
         rain_density = stress_level
         darkness = stress_level * 0.7
 
-        # 1. CIELO
+        # 1. Cielo
         self.screen.fill(COLOR_SKY)
 
-        # 2. PAISAJE
+        # 2. Paisaje
         landscape_y = SCREEN_HEIGHT - self.bg_image.get_height()
         self.screen.blit(self.bg_image, (0, landscape_y))
 
-        # 3. SOL (aparece DESPUÉS de que los rayos se vayan)
+        # 3. Sol
         sun_x = SCREEN_WIDTH - self.sun_image.get_width() - 80
         sun_y = 30
-        if sun_opacity > 0.0:  # Solo dibuja si tiene opacidad
+        if sun_opacity > 0.0:
             self.effects.draw_with_opacity(self.sun_image, (sun_x, sun_y), sun_opacity)
 
-        # 4. NUBES
+        # 4. Nubes
         self.clouds.draw(self.effects, cloud_density)
 
-        # 5. LLUVIA
+        # 5. Lluvia
         self.rain.draw(self.screen, rain_density)
 
-        # 6. RAYOS (desaparecen ANTES de que aparezca el sol)
+        # 6. Rayos
         self.lightning.draw(self.effects, ir_norm)
 
-        # 7. CAPA OSCURA
+        # 7. Capa oscura
         self.effects.draw_dark_overlay(darkness)
 
-        # 8. INFO
+        # 8. HUD
         self._draw_info(ir_norm, stress_level)
 
     def _draw_info(self, ir_norm: float, stress_level: float):
-        """Dibuja información en pantalla con indicadores de etapas."""
         text_color = (255, 255, 255) if ir_norm < 0.5 else (50, 50, 50)
         
         lines = [
@@ -855,46 +745,44 @@ class NeurofeedbackGame:
             f"Confianza: {self.state.confidence*100:.0f}% | Rayos: {len(self.lightning.lightnings)}"
         ]
         
-        # MEJORA: Estado con información de etapas
+        # Estado en función del IR
         if ir_norm < LIGHTNING_END_THRESHOLD:
-            # Etapa 1: Rayos activos
             lightning_strength = ((LIGHTNING_END_THRESHOLD - ir_norm) / LIGHTNING_END_THRESHOLD) * 100
             state_text = f"⚡ ESTRESADO - Rayos: {lightning_strength:.0f}%"
         elif ir_norm < SUN_START_THRESHOLD:
-            # Etapa 2: Transición (sin rayos, sin sol)
             state_text = "🌥️ DESPEJANDO - Respira profundo..."
         elif ir_norm < 0.75:
-            # Etapa 3: Sol apareciendo
             sun_strength = ((ir_norm - SUN_START_THRESHOLD) / (1.0 - SUN_START_THRESHOLD)) * 100
             state_text = f"🌤️ RELAJÁNDOSE - Sol: {sun_strength:.0f}%"
         else:
-            # Etapa 4: Totalmente relajado
             state_text = "☀️ RELAJADO - ¡Excelente!"
         
         lines.append(state_text)
         
         mode = "REAL" if self.use_real_data else "SIMULACIÓN"
-        status = self.neurosky.connection_status if self.neurosky else "N/A"
+        status = self.connection_status
         lines.append(f"Modo: {mode} | Estado: {status}")
-        lines.append(f"Baseline: {self.calibration_summary}")
+        lines.append(f"Baseline IR: {self.calibration_summary}")
         lines.append(f"Ojos: {self.eye_filter.status_text()}")
         
         for i, line in enumerate(lines):
             text_surface = self.font.render(line, True, text_color)
             self.screen.blit(text_surface, (10, 10 + i * 25))
 
+    # ------------------------ LOOP PRINCIPAL ------------------------
+
     def run(self):
         print("\n" + "="*60)
-        print("🎮 CalmSync - Neurofeedback en Tiempo Real")
+        print("🎮 CalmSync - Neurofeedback en Tiempo Real (vía udp.EEGClient)")
         print("="*60)
         print("📊 Sistema de transición por etapas:")
         print(f"   • IR < {LIGHTNING_END_THRESHOLD:.2f}  → ⚡ Rayos progresivos")
-        print(f"   • IR {LIGHTNING_END_THRESHOLD:.2f}-{SUN_START_THRESHOLD:.2f} → 🌥️ Despejando (sin rayos ni sol)")
+        print(f"   • IR {LIGHTNING_END_THRESHOLD:.2f}-{SUN_START_THRESHOLD:.2f} → 🌥️ Despejando")
         print(f"   • IR > {SUN_START_THRESHOLD:.2f}  → ☀️ Sol apareciendo")
-        print("\n💡 Los rayos desaparecen ANTES de que aparezca el sol")
-        print("\n⌨️  Presiona ESC para salir\n")
+        print("\n⌨️  ESC para salir\n")
 
-        if self.use_real_data and self.neurosky:
+        # Calibración IR solo con datos reales
+        if self.use_real_data and self.client:
             self.perform_calibration()
             if not self.running:
                 return
@@ -912,15 +800,16 @@ class NeurofeedbackGame:
             stress_level = 1.0 - self.state.ir_smoothed
             self.rain.update(stress_level)
             self.clouds.update(self.state.ir_smoothed)
-            self.lightning.update(stress_level, self.state.ir_smoothed)  # MEJORA: Pasa ir_normalized
+            self.lightning.update(stress_level, self.state.ir_smoothed)
 
             self.render()
 
             pygame.display.flip()
             self.clock.tick(FPS)
 
-        if self.neurosky:
-            self.neurosky.stop()
+        # Cierre limpio
+        if self.client:
+            self.client.stop()
         
         pygame.quit()
         sys.exit()
@@ -934,8 +823,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='CalmSync Neurofeedback Game')
-    parser.add_argument('--simulate', action='store_true', 
-                       help='Usa datos simulados')
+    parser.add_argument('--simulate', action='store_true',
+                        help='Usa datos simulados (sin MindWave)')
     args = parser.parse_args()
     
     use_real = not args.simulate

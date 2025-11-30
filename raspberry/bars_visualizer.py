@@ -1,57 +1,17 @@
 import pygame
 import sys
 import threading
-import serial
+import time
 from typing import Optional, Tuple
 from collections import deque
 
-# Importamos las funciones del parser
-from generic_parser import parse_packet, extract_data_from_payload
+# Leemos datos desde el servidor EEG central
+from udp import EEGClient
 
 # ---------------------------------------------------------------------
-# CONFIGURACIÓN
+# CONFIGURACIÓN VISUAL
 # ---------------------------------------------------------------------
-import serial
-import sys
-import time
 
-# ==== CONFIG ====
-PORT = "/dev/rfcomm0"  # Cambiar seg�n tu sistema (Windows: "COM7")
-BAUD = 57600
-TIMEOUT = 1
-MAX_RETRIES = 5       # N�mero m�ximo de intentos
-RETRY_DELAY = 2       # Segundos entre intentos
-
-# ==== CONEXI�N SERIAL CON REINTENTOS ====
-ser = None
-for attempt in range(1, MAX_RETRIES + 1):
-    try:
-        ser = serial.Serial(PORT, BAUD, timeout=TIMEOUT)
-        print(f"Conectado a {PORT} en el intento {attempt}.")
-        break
-    except serial.SerialException as e:
-        print(f"Intento {attempt} fallido: {e}")
-        if attempt < MAX_RETRIES:
-            print(f"Reintentando en {RETRY_DELAY} segundos...")
-            time.sleep(RETRY_DELAY)
-        else:
-            print("No se pudo conectar al MindWave. Saliendo del programa.")
-            sys.exit(1)
-
-# En este punto `ser` est� listo para ser usado por tu parser
-
-
-NEUROSKY_PORT = "/dev/rfcomm0"  # o "COM10" en Windows
-NEUROSKY_BAUD = 57600
-
-CODE_HANDLERS_EEG = {0x83: 'eeg_power'}
-
-ALPHA_IDX = [2, 3]
-BETA_IDX = [4, 5]
-
-SMOOTHING_ALPHA = 0.15
-
-# Configuración visual
 SCREEN_WIDTH = 600
 SCREEN_HEIGHT = 400
 FPS = 30
@@ -64,93 +24,17 @@ COLOR_TEXT = (255, 255, 255)
 COLOR_GRID = (50, 50, 70)
 
 # Escala de barras
-MAX_POWER_DISPLAY = 50000  # Ajusta según tus valores típicos
+MAX_POWER_DISPLAY = 50000  # Ajusta según los valores típicos que veas
 BAR_WIDTH = 80
 BAR_SPACING = 50
 
+# IR mapping (mismo rango que en el juego)
+IR_MIN = 0.3
+IR_MAX = 3.0
+IR_RANGE = IR_MAX - IR_MIN
 
-# ---------------------------------------------------------------------
-# LECTOR DE NEUROSKY (simplificado)
-# ---------------------------------------------------------------------
-
-class NeuroSkyReader:
-    """Lee solo Alpha y Beta del NeuroSky."""
-    
-    def __init__(self, port: str, baud: int):
-        self.port = port
-        self.baud = baud
-        
-        self.alpha = 0.0
-        self.beta = 0.0
-        
-        self.running = False
-        self.thread: Optional[threading.Thread] = None
-        self.serial_port: Optional[serial.Serial] = None
-        self.connection_status = "Desconectado"
-        
-        self.lock = threading.Lock()
-    
-    def get_alpha_from_payload(self, payload: bytes) -> Optional[float]:
-        data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
-        if 'eeg_power' in data:
-            powers = data['eeg_power']
-            return sum([powers[i] for i in ALPHA_IDX]) / len(ALPHA_IDX)
-        return None
-    
-    def get_beta_from_payload(self, payload: bytes) -> Optional[float]:
-        data = extract_data_from_payload(payload, CODE_HANDLERS_EEG)
-        if 'eeg_power' in data:
-            powers = data['eeg_power']
-            return sum([powers[i] for i in BETA_IDX]) / len(BETA_IDX)
-        return None
-    
-    def _read_loop(self):
-        try:
-            self.serial_port = serial.Serial(self.port, self.baud, timeout=1)
-            self.connection_status = "Conectado"
-            print(f"✅ NeuroSky conectado en {self.port}")
-            
-            while self.running:
-                payload = parse_packet(self.serial_port)
-                
-                if payload is None:
-                    continue
-                
-                raw_alpha = self.get_alpha_from_payload(payload)
-                raw_beta = self.get_beta_from_payload(payload)
-                
-                with self.lock:
-                    if raw_alpha is not None:
-                        self.alpha = (SMOOTHING_ALPHA * raw_alpha + 
-                                    (1 - SMOOTHING_ALPHA) * self.alpha)
-                    
-                    if raw_beta is not None:
-                        self.beta = (SMOOTHING_ALPHA * raw_beta + 
-                                   (1 - SMOOTHING_ALPHA) * self.beta)
-        
-        except serial.SerialException as e:
-            self.connection_status = f"Error: {e}"
-            print(f"❌ Error de conexión: {e}")
-        
-        finally:
-            if self.serial_port and self.serial_port.is_open:
-                self.serial_port.close()
-            self.connection_status = "Desconectado"
-    
-    def start(self):
-        if not self.running:
-            self.running = True
-            self.thread = threading.Thread(target=self._read_loop, daemon=True)
-            self.thread.start()
-    
-    def stop(self):
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=2)
-    
-    def get_values(self) -> Tuple[float, float]:
-        with self.lock:
-            return self.alpha, self.beta
+# Suavizado extra para la visualización
+SMOOTHING_HISTORY = 5
 
 
 # ---------------------------------------------------------------------
@@ -158,7 +42,10 @@ class NeuroSkyReader:
 # ---------------------------------------------------------------------
 
 class EEGBarsVisualizer:
-    """Visualiza Alpha y Beta como barras verticales animadas."""
+    """
+    Visualiza Alpha y Beta como barras verticales animadas, 
+    leyendo de udp.EEGClient (mismo servidor que el resto de la app).
+    """
     
     def __init__(self, use_real_data: bool = True):
         pygame.init()
@@ -168,18 +55,20 @@ class EEGBarsVisualizer:
         self.font_large = pygame.font.Font(None, 48)
         self.font_small = pygame.font.Font(None, 24)
         
-        # Inicializa NeuroSky
+        # EEG centralizado vía UDP/TCP
         self.use_real_data = use_real_data
-        self.neurosky: Optional[NeuroSkyReader] = None
+        self.client: Optional[EEGClient] = None
+        self.connection_status = "N/A"
         
         if use_real_data:
             try:
-                self.neurosky = NeuroSkyReader(NEUROSKY_PORT, NEUROSKY_BAUD)
-                self.neurosky.start()
-                print("🧠 Modo: Datos reales")
+                self.client = EEGClient()
+                self.client.start()
+                self.connection_status = "Conectando al servidor EEG..."
+                print("🧠 Modo: Datos reales vía udp.EEGClient")
             except Exception as e:
-                print(f"⚠️ Error: {e}")
-                print("🎮 Modo simulación")
+                print(f"⚠️ Error inicializando EEGClient: {e}")
+                print("🎮 Pasando a modo simulación")
                 self.use_real_data = False
         else:
             print("🎮 Modo simulación")
@@ -193,34 +82,67 @@ class EEGBarsVisualizer:
         # Estado actual
         self.alpha = 0.0
         self.beta = 0.0
+        self.attention = 0.0
+        self.meditation = 0.0
+        self.signal_quality = 200  # 0 = perfecto, 200 = sin contacto
         
         # Histórico para suavizado visual
-        self.alpha_history = deque(maxlen=5)
-        self.beta_history = deque(maxlen=5)
+        self.alpha_history = deque(maxlen=SMOOTHING_HISTORY)
+        self.beta_history = deque(maxlen=SMOOTHING_HISTORY)
         
         self.running = True
     
+    # -----------------------------------------------------------------
+    # ACTUALIZACIÓN DE DATOS
+    # -----------------------------------------------------------------
+    
+    def _update_from_real_eeg(self):
+        if not self.client:
+            return
+        
+        data = self.client.get_data()
+        self.alpha = float(data.get("alpha", 0.0))
+        self.beta = float(data.get("beta", 0.0))
+        self.attention = float(data.get("attention", 0.0))
+        self.meditation = float(data.get("meditation", 0.0))
+        self.signal_quality = int(data.get("signal_quality", 200))
+        
+        # Estado de conexión textual
+        if self.signal_quality >= 200:
+            self.connection_status = "Sin señal"
+        elif self.signal_quality > 50:
+            self.connection_status = f"Conectado (ajusta sensor, ruido={self.signal_quality})"
+        else:
+            self.connection_status = "Conectado (buena señal)"
+    
+    def _update_from_simulation(self):
+        # Simulación: oscilación automática de alpha/beta
+        self.sim_alpha += 100 * self.sim_direction_alpha
+        self.sim_beta += 80 * self.sim_direction_beta
+        
+        if self.sim_alpha > 40000:
+            self.sim_direction_alpha = -1
+        elif self.sim_alpha < 2000:
+            self.sim_direction_alpha = 1
+        
+        if self.sim_beta > 35000:
+            self.sim_direction_beta = -1
+        elif self.sim_beta < 2000:
+            self.sim_direction_beta = 1
+        
+        self.alpha = self.sim_alpha
+        self.beta = self.sim_beta
+        self.attention = 50
+        self.meditation = 50
+        self.signal_quality = 0
+        self.connection_status = "Simulación"
+    
     def update_data(self):
         """Actualiza los valores de Alpha y Beta."""
-        if self.use_real_data and self.neurosky:
-            self.alpha, self.beta = self.neurosky.get_values()
+        if self.use_real_data and self.client:
+            self._update_from_real_eeg()
         else:
-            # Simulación: oscilación automática
-            self.sim_alpha += 100 * self.sim_direction_alpha
-            self.sim_beta += 80 * self.sim_direction_beta
-            
-            if self.sim_alpha > 40000:
-                self.sim_direction_alpha = -1
-            elif self.sim_alpha < 2000:
-                self.sim_direction_alpha = 1
-            
-            if self.sim_beta > 35000:
-                self.sim_direction_beta = -1
-            elif self.sim_beta < 2000:
-                self.sim_direction_beta = 1
-            
-            self.alpha = self.sim_alpha
-            self.beta = self.sim_beta
+            self._update_from_simulation()
         
         # Suavizado visual adicional
         self.alpha_history.append(self.alpha)
@@ -234,12 +156,16 @@ class EEGBarsVisualizer:
             return alpha_smooth, beta_smooth
         return self.alpha, self.beta
     
+    # -----------------------------------------------------------------
+    # DIBUJO DE ELEMENTOS
+    # -----------------------------------------------------------------
+    
     def draw_bar(self, x: int, value: float, max_value: float, color: Tuple[int, int, int], label: str):
         """Dibuja una barra vertical animada."""
         # Calcula altura de la barra
         bar_height_max = SCREEN_HEIGHT - 150  # Espacio para labels
         bar_height = (value / max_value) * bar_height_max
-        bar_height = min(bar_height, bar_height_max)
+        bar_height = max(0, min(bar_height, bar_height_max))
         
         # Posición
         bar_y = SCREEN_HEIGHT - 100 - bar_height
@@ -269,7 +195,7 @@ class EEGBarsVisualizer:
         self.screen.blit(value_surface, value_rect)
     
     def draw_grid(self):
-        """Dibuja líneas de referencia."""
+        """Dibuja líneas de referencia horizontales."""
         for i in range(1, 5):
             y = 50 + (i * (SCREEN_HEIGHT - 150) // 5)
             pygame.draw.line(self.screen, COLOR_GRID, (50, y), (SCREEN_WIDTH - 50, y), 1)
@@ -279,10 +205,10 @@ class EEGBarsVisualizer:
         beta = max(0.1, beta)
         ir = alpha / beta
         
-        # Mapeo a rango 0.3-3.0
-        ir_normalized = max(0.0, min(1.0, (ir - 0.3) / (3.0 - 0.3)))
+        # Normalización al rango 0–1 con IR_MIN/IR_MAX
+        ir_normalized = max(0.0, min(1.0, (ir - IR_MIN) / IR_RANGE))
         
-        # Texto
+        # Estado mental aproximado
         if ir_normalized < 0.35:
             state = "ESTRESADO"
             color = (255, 100, 100)
@@ -306,16 +232,16 @@ class EEGBarsVisualizer:
         
         # Fondo
         pygame.draw.rect(self.screen, (50, 50, 50), 
-                        (bar_x, bar_y, bar_width, bar_height))
+                         (bar_x, bar_y, bar_width, bar_height))
         
         # Relleno según IR
         fill_width = int(bar_width * ir_normalized)
         pygame.draw.rect(self.screen, color, 
-                        (bar_x, bar_y, fill_width, bar_height))
+                         (bar_x, bar_y, fill_width, bar_height))
         
         # Borde
         pygame.draw.rect(self.screen, (255, 255, 255), 
-                        (bar_x, bar_y, bar_width, bar_height), 2)
+                         (bar_x, bar_y, bar_width, bar_height), 2)
     
     def render(self):
         """Renderiza el frame completo."""
@@ -325,7 +251,7 @@ class EEGBarsVisualizer:
         # Grid de referencia
         self.draw_grid()
         
-        # Obtiene valores suavizados
+        # Valores suavizados
         alpha_smooth, beta_smooth = self.get_smoothed_values()
         
         # Dibuja barras
@@ -338,18 +264,22 @@ class EEGBarsVisualizer:
         # Indicador IR
         self.draw_ir_indicator(self.alpha, self.beta)
         
-        # Estado de conexión
+        # Estado de conexión + atención/meditación
         status = "REAL" if self.use_real_data else "SIMULACIÓN"
-        if self.neurosky:
-            status += f" - {self.neurosky.connection_status}"
+        status += f" | {self.connection_status}"
+        extra = f" | Att: {self.attention:.0f}  Med: {self.meditation:.0f}"
         
-        status_surface = self.font_small.render(status, True, COLOR_TEXT)
+        status_surface = self.font_small.render(status + extra, True, COLOR_TEXT)
         self.screen.blit(status_surface, (10, SCREEN_HEIGHT - 25))
+    
+    # -----------------------------------------------------------------
+    # LOOP PRINCIPAL
+    # -----------------------------------------------------------------
     
     def run(self):
         """Bucle principal."""
         print("\n" + "="*60)
-        print("📊 Visualizador de Barras EEG")
+        print("📊 Visualizador de Barras EEG (udp.EEGClient)")
         print("="*60)
         print("🔵 ALPHA - Banda de relajación")
         print("🟠 BETA  - Banda de actividad/concentración")
@@ -369,8 +299,8 @@ class EEGBarsVisualizer:
             pygame.display.flip()
             self.clock.tick(FPS)
         
-        if self.neurosky:
-            self.neurosky.stop()
+        if self.client:
+            self.client.stop()
         
         pygame.quit()
         sys.exit()
@@ -383,8 +313,9 @@ class EEGBarsVisualizer:
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='EEG Bars Visualizer')
-    parser.add_argument('--simulate', action='store_true')
+    parser = argparse.ArgumentParser(description='EEG Bars Visualizer (udp.EEGClient)')
+    parser.add_argument('--simulate', action='store_true',
+                        help='Usa datos simulados (sin MindWave)')
     args = parser.parse_args()
     
     visualizer = EEGBarsVisualizer(use_real_data=not args.simulate)

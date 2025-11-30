@@ -22,7 +22,7 @@ header_frame.pack_propagate(False)
 
 # Botón corazón arriba a la izquierda
 def abrir_frecuencia_cardiaca():
-    subprocess.Popen(["python3", "fecuencia_cardiaca.py"])
+    subprocess.Popen(["python3", "frecuencia_cardiaca.py"])
 
 heart_button = ctk.CTkButton(
     header_frame,

@@ -2,35 +2,33 @@ import customtkinter as ctk
 import subprocess
 
 # ==============================
-# CONFIGURACIÓN GENERAL UI
+# CONFIG GENERAL
 # ==============================
 
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-# Paleta más sobria y menos lavada
-APP_BG = "#E5E8F3"        # fondo general
-CARD_BG = "#F9FAFF"       # tarjetas
-HEADER_BG = "#E1E5FF"
-FOOTER_BG = "#E1E5FF"
+# Paleta muy controlada
+APP_BG     = "#F3F4F8"   # gris muy claro
+HEADER_BG  = "#EEF0FF"   # lavanda suave
+FOOTER_BG  = "#EEF0FF"
+CARD_BG    = "#FFFFFF"   # blanco limpio
 
-ACCENT = "#5865D8"        # azul-violeta calmado
-ACCENT_SOFT = "#9AA3FF"
-ACCENT_DARK = "#4048A8"
+ACCENT     = "#5F6DFB"   # azul-lavanda principal
+ACCENT_SOFT = "#E1E4FF"  # pill / badge suave
 
-TEXT_MAIN = "#222741"
-TEXT_SOFT = "#7A819C"
+TEXT_MAIN  = "#222436"
+TEXT_SOFT  = "#7A819C"
 
 app = ctk.CTk()
 app.title("CalmSync")
 app.geometry("1024x768")
 app.resizable(False, False)
 app.attributes("-fullscreen", True)
-
 app.configure(fg_color=APP_BG)
 
 # ==============================
-# FUNCIONES DE NAVEGACIÓN
+# LANZADORES
 # ==============================
 
 def abrir_frecuencia_cardiaca():
@@ -64,122 +62,111 @@ header_frame = ctk.CTkFrame(
     main_frame,
     fg_color=HEADER_BG,
     corner_radius=0,
-    height=120
+    height=110,
 )
 header_frame.pack(fill="x", padx=0, pady=0)
 header_frame.pack_propagate(False)
 
-# Botón BPM
+# BPM (ghost button)
 heart_button = ctk.CTkButton(
     header_frame,
     text="BPM",
-    font=("Helvetica", 16, "bold"),
+    font=("Helvetica", 15, "bold"),
     fg_color="white",
-    hover_color="#D7DBFF",
-    text_color=ACCENT_DARK,
-    width=70,
-    height=34,
-    corner_radius=18,
+    hover_color="#E4E6FF",
+    text_color=ACCENT,
+    width=68,
+    height=32,
+    corner_radius=16,
     command=abrir_frecuencia_cardiaca,
     cursor="hand2",
     border_width=1,
-    border_color="#C5CBFB"
+    border_color="#D1D5FF"
 )
-heart_button.place(x=24, y=24)
+heart_button.place(x=22, y=24)
 
-# Botón cerrar
+# Close
 close_button = ctk.CTkButton(
     header_frame,
     text="✕",
-    font=("Helvetica", 20, "bold"),
+    font=("Helvetica", 18, "bold"),
     fg_color="white",
-    hover_color="#FFDADA",
-    text_color="#FF5A5A",
-    width=46,
-    height=34,
-    corner_radius=18,
+    hover_color="#FFE5E5",
+    text_color="#F35B5B",
+    width=44,
+    height=32,
+    corner_radius=16,
     command=cerrar_app,
     cursor="hand2",
     border_width=1,
-    border_color="#F3B0B0"
+    border_color="#F3B6B6"
 )
 close_button.place(relx=1.0, x=-70, y=24)
 
-# Título centrado
+# Título
 title_container = ctk.CTkFrame(header_frame, fg_color="transparent")
 title_container.pack(expand=True)
 
 title_label = ctk.CTkLabel(
     title_container,
     text="CalmSync",
-    font=("Helvetica", 52, "bold"),
-    text_color=ACCENT_DARK
+    font=("Helvetica", 44, "bold"),
+    text_color=ACCENT
 )
 title_label.pack(anchor="center")
 
 subtitle_label = ctk.CTkLabel(
     title_container,
-    text="Guide your mind from stormy to serene",
-    font=("Helvetica", 14),
+    text="Neurofeedback made simple and calm.",
+    font=("Helvetica", 13),
     text_color=TEXT_SOFT
 )
-subtitle_label.pack(anchor="center", pady=(3, 0))
+subtitle_label.pack(anchor="center", pady=(2, 0))
 
-# ---------- ÁREA CENTRAL ----------
+# ---------- ZONA CENTRAL ----------
 center_frame = ctk.CTkFrame(main_frame, fg_color=APP_BG)
-center_frame.pack(fill="both", expand=True, padx=60, pady=(24, 16))
+center_frame.pack(fill="both", expand=True, padx=72, pady=(24, 16))
 
-cards_frame = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=22)
-cards_frame.pack(expand=True, fill="both", padx=4, pady=4)
+cards_frame = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=20)
+cards_frame.pack(expand=True, fill="both", padx=0, pady=0)
 
+# Título bloque
 block_title = ctk.CTkLabel(
     cards_frame,
     text="Choose your session",
-    font=("Helvetica", 18, "bold"),
+    font=("Helvetica", 17, "bold"),
     text_color=TEXT_MAIN
 )
-block_title.pack(anchor="w", padx=28, pady=(20, 4))
+block_title.pack(anchor="w", padx=28, pady=(18, 3))
 
 block_subtitle = ctk.CTkLabel(
     cards_frame,
-    text="Begin with calibration for best results, then explore the different tools.",
+    text="Start with calibration, then explore visualisation, neurofeedback, and Stroop.",
     font=("Helvetica", 12),
     text_color=TEXT_SOFT
 )
-block_subtitle.pack(anchor="w", padx=28, pady=(0, 10))
+block_subtitle.pack(anchor="w", padx=28, pady=(0, 12))
 
 buttons_frame = ctk.CTkFrame(cards_frame, fg_color="transparent")
-buttons_frame.pack(expand=True, fill="both", padx=26, pady=18)
+buttons_frame.pack(expand=True, fill="both", padx=24, pady=16)
 
 modules = [
-    (
-        "Calibration",
-        "Check signal quality\nand prepare your baseline.",
-        abrir_calibration,
-        "1",
-        ACCENT
-    ),
-    (
-        "Bars Visualizer",
-        "See your Alpha / Beta waves\nin real time.",
-        abrir_bars_visualizer,
-        "2",
-        "#4CB2FF"
-    ),
-    (
-        "Neurofeedback Game",
-        "Turn stormy skies into sunshine\nwith your mental state.",
-        abrir_neurofeedback,
-        "3",
-        "#41C7A3"
-    ),
-    (
-        "Stroop Game",
-        "Measure cognitive control\nunder gentle challenge.",
-        abrir_stroop_game,
-        "4",
-        "#FF9F6B"
-    ),
+    ("Calibration",
+     "Check signal quality and prepare your baseline.",
+     abrir_calibration,
+     "1"),
+    ("Bars Visualizer",
+     "See your Alpha/Beta waves in real time.",
+     abrir_bars_visualizer,
+     "2"),
+    ("Neurofeedback Game",
+     "Change the weather with your mental state.",
+     abrir_neurofeedback,
+     "3"),
+    ("Stroop Game",
+     "Test cognitive control in a gentle way.",
+     abrir_stroop_game,
+     "4"),
 ]
 
 buttons_frame.grid_columnconfigure((0, 1), weight=1, uniform="col")
@@ -187,7 +174,7 @@ buttons_frame.grid_rowconfigure((0, 1), weight=1, uniform="row")
 
 button_refs = []
 
-for idx, (title, desc, cmd, key, color) in enumerate(modules):
+for idx, (title, desc, cmd, key) in enumerate(modules):
     row = idx // 2
     col = idx % 2
 
@@ -196,33 +183,34 @@ for idx, (title, desc, cmd, key, color) in enumerate(modules):
         fg_color=CARD_BG,
         corner_radius=18,
         border_width=1,
-        border_color="#D6DBF0"
+        border_color="#E0E3F0"
     )
-    card.grid(row=row, column=col, padx=14, pady=14, sticky="nsew")
+    card.grid(row=row, column=col, padx=12, pady=12, sticky="nsew")
 
     card.grid_columnconfigure(0, weight=1)
     card.grid_columnconfigure(1, weight=0)
 
-    # Columna izquierda: badge + textos
+    # Columna izquierda: número + texto
     left = ctk.CTkFrame(card, fg_color="transparent")
-    left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=14)
+    left.grid(row=0, column=0, sticky="nsew", padx=(18, 8), pady=14)
 
+    # Número en pill suave
     badge = ctk.CTkLabel(
         left,
         text=key,
-        font=("Helvetica", 14, "bold"),
-        text_color="white",
-        fg_color=color,
+        font=("Helvetica", 13, "bold"),
+        text_color=ACCENT,
+        fg_color=ACCENT_SOFT,
         corner_radius=999,
         width=26,
-        height=26
+        height=24
     )
     badge.pack(anchor="w")
 
     title_label = ctk.CTkLabel(
         left,
         text=title,
-        font=("Helvetica", 18, "bold"),
+        font=("Helvetica", 17, "bold"),
         text_color=TEXT_MAIN
     )
     title_label.pack(anchor="w", pady=(4, 0))
@@ -236,19 +224,19 @@ for idx, (title, desc, cmd, key, color) in enumerate(modules):
     )
     desc_label.pack(anchor="w", pady=(2, 0))
 
-    # Columna derecha: botón compacto
+    # Columna derecha: botón único de acento
     right = ctk.CTkFrame(card, fg_color="transparent")
-    right.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=14)
+    right.grid(row=0, column=1, sticky="e", padx=(0, 18), pady=14)
 
     btn = ctk.CTkButton(
         right,
         text=f"Start  ({key})",
         font=("Helvetica", 13, "bold"),
         text_color="white",
-        fg_color=color,
-        hover_color=ACCENT_DARK,
+        fg_color=ACCENT,
+        hover_color="#4A57D9",
         corner_radius=18,
-        width=120,          # evita barra larguísima
+        width=110,
         height=34,
         command=cmd,
         cursor="hand2"
@@ -262,18 +250,18 @@ footer_frame = ctk.CTkFrame(
     main_frame,
     fg_color=FOOTER_BG,
     corner_radius=0,
-    height=70
+    height=64
 )
 footer_frame.pack(fill="x", side="bottom", padx=0, pady=0)
 footer_frame.pack_propagate(False)
 
 footer_inner = ctk.CTkFrame(footer_frame, fg_color="transparent")
-footer_inner.pack(expand=True, fill="both", padx=26)
+footer_inner.pack(expand=True, fill="both", padx=24)
 
 footer_label1 = ctk.CTkLabel(
     footer_inner,
     text="Affordable Wellness · CalmSync",
-    font=("Helvetica", 12, "bold"),
+    font=("Helvetica", 11, "bold"),
     text_color=TEXT_MAIN
 )
 footer_label1.pack(anchor="w")
@@ -288,14 +276,14 @@ footer_label2.pack(anchor="w", pady=(1, 0))
 
 footer_hint = ctk.CTkLabel(
     footer_inner,
-    text="Use 1–4 to open modules · Esc to exit",
+    text="Press 1–4 to open modules · Esc to exit",
     font=("Helvetica", 11),
     text_color=TEXT_SOFT
 )
 footer_hint.pack(anchor="e")
 
 # ==============================
-# BINDINGS TECLADO
+# TECLADO
 # ==============================
 
 def on_key(event):

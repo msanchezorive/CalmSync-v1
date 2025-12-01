@@ -15,19 +15,19 @@ FOOTER_BG   = "#F1EFFF"
 CARD_BG     = "#FFFFFF"   # tarjetas principales
 SIDE_BG     = "#F7F5FF"   # panel lateral
 
-ACCENT      = "#6762D9"   # morado calmado
+ACCENT      = "#5C57C7"  # morado algo más profundo (≈ 5.2:1)
 ACCENT_SOFT = "#E2E0FF"   # pill suave
 
 TEXT_MAIN   = "#25263A"
-TEXT_SOFT   = "#8687A3"
+TEXT_SOFT   = "#656A8A"  # gris-lila un poco más oscuro (≈ 4.8:1)
 
 # Tipos de letra (serif para títulos, sans para cuerpo)
 TITLE_FONT         = ("Times New Roman", 38, "bold")
 SUBTITLE_FONT      = ("Helvetica", 13)
 SECTION_TITLE_FONT = ("Times New Roman", 18, "bold")
 STEP_TITLE_FONT    = ("Times New Roman", 16, "bold")
-BODY_FONT          = ("Helvetica", 12)
-SMALL_FONT         = ("Helvetica", 11)
+BODY_FONT   = ("Helvetica", 13)  
+SMALL_FONT  = ("Helvetica", 12)  
 
 app = ctk.CTk()
 app.title("CalmSync")

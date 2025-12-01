@@ -27,13 +27,8 @@ COLOR_GRID = (50, 50, 70)
 BAR_WIDTH = 80
 BAR_SPACING = 50
 
-# IR mapping (mismo rango que en el juego)
-IR_MIN = 0.3
-IR_MAX = 3.0
-IR_RANGE = IR_MAX - IR_MIN
-
 # Suavizado extra para la visualización
-SMOOTHING_HISTORY = 10   # o incluso 15
+SMOOTHING_HISTORY = 10
 
 
 # ---------------------------------------------------------------------
@@ -164,6 +159,16 @@ class EEGBarsVisualizer:
             beta_smooth = sum(self.beta_history) / len(self.beta_history)
             return alpha_smooth, beta_smooth
         return self.alpha, self.beta
+
+    def compute_calm_level(self) -> float:
+        """
+        Índice de calma basado en attention/meditation (0–100).
+        """
+        med_norm = max(0.0, min(1.0, self.meditation / 100.0))
+        att_norm = max(0.0, min(1.0, self.attention / 100.0))
+
+        calm = 0.7 * med_norm + 0.3 * (1.0 - att_norm)
+        return max(0.0, min(1.0, calm))
     
     # -----------------------------------------------------------------
     # DIBUJO DE ELEMENTOS
@@ -199,7 +204,7 @@ class EEGBarsVisualizer:
         label_rect = label_surface.get_rect(center=(x, SCREEN_HEIGHT - 60))
         self.screen.blit(label_surface, label_rect)
         
-        # Valor numérico
+        # Valor numérico (crudo)
         value_text = f"{int(value)}"
         value_surface = self.font_small.render(value_text, True, COLOR_TEXT)
         value_rect = value_surface.get_rect(center=(x, SCREEN_HEIGHT - 30))
@@ -212,46 +217,44 @@ class EEGBarsVisualizer:
             pygame.draw.line(self.screen, COLOR_GRID, (50, y), (SCREEN_WIDTH - 50, y), 1)
     
     def draw_ir_indicator(self, alpha: float, beta: float):
-        """Dibuja indicador del ratio IR en la parte superior."""
+        """Indicador de estado usando CalmIdx, mostrando también IR α/β."""
         beta = max(0.1, beta)
-        ir = alpha / beta
-        
-        # Normalización al rango 0–1 con IR_MIN/IR_MAX
-        ir_normalized = max(0.0, min(1.0, (ir - IR_MIN) / IR_RANGE))
-        
-        # Estado mental aproximado
-        if ir_normalized < 0.35:
+        ir = alpha / beta  # IR real α/β
+
+        # Calm index basado en eSense
+        calm = self.compute_calm_level()  # 0–1
+
+        # Estado mental según calm
+        if calm < 0.35:
             state = "ESTRESADO"
             color = (255, 100, 100)
-        elif ir_normalized < 0.65:
+        elif calm < 0.65:
             state = "NEUTRAL"
             color = (255, 255, 100)
         else:
             state = "RELAJADO"
             color = (100, 255, 100)
-        
-        text = f"IR: {ir:.2f} - {state}"
+
+        # Texto combinado
+        text = f"CalmIdx: {calm:.2f} | IR α/β: {ir:.2f} - {state}"
         text_surface = self.font_small.render(text, True, color)
         text_rect = text_surface.get_rect(center=(SCREEN_WIDTH // 2, 20))
         self.screen.blit(text_surface, text_rect)
         
-        # Barra de IR
+        # Barra basada en CalmIdx
         bar_width = 300
         bar_x = (SCREEN_WIDTH - bar_width) // 2
         bar_y = 40
         bar_height = 15
         
-        # Fondo
-        pygame.draw.rect(self.screen, (50, 50, 50), 
+        pygame.draw.rect(self.screen, (50, 50, 50),
                          (bar_x, bar_y, bar_width, bar_height))
         
-        # Relleno según IR
-        fill_width = int(bar_width * ir_normalized)
-        pygame.draw.rect(self.screen, color, 
+        fill_width = int(bar_width * calm)
+        pygame.draw.rect(self.screen, color,
                          (bar_x, bar_y, fill_width, bar_height))
         
-        # Borde
-        pygame.draw.rect(self.screen, (255, 255, 255), 
+        pygame.draw.rect(self.screen, (255, 255, 255),
                          (bar_x, bar_y, bar_width, bar_height), 2)
     
     def render(self):
@@ -277,7 +280,7 @@ class EEGBarsVisualizer:
         self.draw_bar(alpha_x, alpha_smooth, alpha_max, COLOR_ALPHA, "ALPHA")
         self.draw_bar(beta_x, beta_smooth, beta_max, COLOR_BETA, "BETA")
         
-        # Indicador IR
+        # Indicador CalmIdx + IR α/β
         self.draw_ir_indicator(self.alpha, self.beta)
         
         # Estado de conexión + atención/meditación
@@ -299,6 +302,7 @@ class EEGBarsVisualizer:
         print("="*60)
         print("🔵 ALPHA - Banda de relajación")
         print("🟠 BETA  - Banda de actividad/concentración")
+        print("CalmIdx basado en Attention + Meditation")
         print("\n⌨️  Presiona ESC para salir\n")
         
         while self.running:

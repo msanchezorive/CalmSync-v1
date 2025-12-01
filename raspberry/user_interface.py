@@ -11,14 +11,14 @@ ctk.set_default_color_theme("blue")
 APP_BG      = "#F3F4F8"   # gris muy claro
 HEADER_BG   = "#EEF0FF"   # lavanda suave
 FOOTER_BG   = "#EEF0FF"
-CARD_BG     = "#FFFFFF"   # blanco limpio
-SIDE_BG     = "#F5F6FF"   # panel lateral suave
+CARD_BG     = "#FFFFFF"
 
 ACCENT      = "#5F6DFB"   # azul-lavanda principal
 ACCENT_SOFT = "#E1E4FF"
 
 TEXT_MAIN   = "#222436"
 TEXT_SOFT   = "#7A819C"
+
 
 app = ctk.CTk()
 app.title("CalmSync")
@@ -28,36 +28,160 @@ app.attributes("-fullscreen", True)
 app.configure(fg_color=APP_BG)
 
 # ==============================
-# LANZADORES
+# DEFINICIÓN DE STEPS
 # ==============================
 
-def abrir_frecuencia_cardiaca():
-    subprocess.Popen(["python", "frecuencia_cardiaca.py"])
+# Cada step del flujo
+STEPS_CONFIG = [
+    {
+        "id": 1,
+        "title": "Calibration",
+        "subtitle": "Check signal quality and prepare your baseline.",
+        "btn_text": "Begin Calibration",
+        "script": "initial_calibration.py",
+        "shortcut": "1",
+        "approx": "~8 min",
+    },
+    {
+        "id": 2,
+        "title": "Bars Visualizer",
+        "subtitle": "See your Alpha/Beta waves in real time.",
+        "btn_text": "Watch Your Waves",
+        "script": "bars_visualizer.py",
+        "shortcut": "2",
+        "approx": "flexible",
+    },
+    {
+        "id": 3,
+        "title": "Neurofeedback Game (pre)",
+        "subtitle": "Change the weather with your mental state (before Stroop).",
+        "btn_text": "Play Neurofeedback",
+        "script": "neurofeedback_game.py",
+        "shortcut": "3",
+        "approx": "~5–10 min",
+    },
+    {
+        "id": 4,
+        "title": "Stroop Game",
+        "subtitle": "Test cognitive control in a gentle way.",
+        "btn_text": "Take Stroop Test",
+        "script": "test_stroop_tactil.py",
+        "shortcut": "4",
+        "approx": "~5 min",
+    },
+    {
+        "id": 5,
+        "title": "Neurofeedback Game (post)",
+        "subtitle": "Repeat the game and observe how your brain changed.",
+        "btn_text": "Play Neurofeedback Again",
+        "script": "neurofeedback_game.py",
+        "shortcut": "5",
+        "approx": "~5–10 min",
+    },
+]
 
-def abrir_calibration():
-    subprocess.Popen(["python", "initial_calibration.py"])
+# Estados: locked / ready / running / done / hidden
+steps_state = {}
+for step in STEPS_CONFIG:
+    if step["id"] == 1:
+        steps_state[step["id"]] = {"status": "ready", "process": None, "visible": True}
+    elif step["id"] in (2, 3, 4):
+        steps_state[step["id"]] = {"status": "locked", "process": None, "visible": True}
+    else:  # step 5
+        steps_state[step["id"]] = {"status": "locked", "process": None, "visible": False}
 
-def abrir_bars_visualizer():
-    subprocess.Popen(["python", "bars_visualizer.py"])
+step_widgets = {}  # guardaremos los widgets de cada tarjeta
+button_refs = []   # para atajos de teclado
 
-def abrir_neurofeedback():
-    subprocess.Popen(["python", "neurofeedback_game.py"])
 
-def abrir_stroop_game():
-    subprocess.Popen(["python", "test_stroop_tactil.py"])
+# ==============================
+# UTILIDADES
+# ==============================
 
 def cerrar_app(event=None):
     app.quit()
     app.destroy()
 
+
+def start_step(step_id):
+    """Lanza el script del step si está listo."""
+    state = steps_state[step_id]
+    if state["status"] not in ("ready", "done"):
+        return
+
+    cfg = next(s for s in STEPS_CONFIG if s["id"] == step_id)
+    try:
+        # lanzamos el script correspondiente
+        proc = subprocess.Popen(["python", cfg["script"]])
+    except Exception as e:
+        print(f"Error launching {cfg['script']}: {e}")
+        return
+
+    state["process"] = proc
+    state["status"] = "running"
+    refresh_ui()
+
+
+def poll_processes():
+    """Revisa periódicamente si los procesos han terminado para marcar steps como completados."""
+    for step in STEPS_CONFIG:
+        sid = step["id"]
+        state = steps_state[sid]
+        proc = state["process"]
+        if proc is not None:
+            ret = proc.poll()
+            if ret is not None:
+                # Ha terminado
+                state["process"] = None
+                state["status"] = "done"
+                unlock_next_step(sid)
+                refresh_ui()
+    app.after(2000, poll_processes)
+
+
+def unlock_next_step(current_id):
+    """Desbloquea el siguiente paso en el flujo."""
+    # Encuentra índice en la lista de config
+    ids = [s["id"] for s in STEPS_CONFIG]
+    if current_id not in ids:
+        return
+    idx = ids.index(current_id)
+
+    # Caso especial: al terminar 4, mostramos/desbloqueamos el 5
+    if current_id == 4:
+        if 5 in steps_state:
+            steps_state[5]["visible"] = True
+            if steps_state[5]["status"] == "locked":
+                steps_state[5]["status"] = "ready"
+        return
+
+    # Desbloquear siguiente si existe y está locked
+    if idx + 1 < len(STEPS_CONFIG):
+        next_id = STEPS_CONFIG[idx + 1]["id"]
+        if steps_state[next_id]["status"] == "locked":
+            steps_state[next_id]["status"] = "ready"
+
+
+def get_progress():
+    """Devuelve (step_actual, step_total_visible)."""
+    visible_ids = [s["id"] for s in STEPS_CONFIG if steps_state[s["id"]]["visible"]]
+    total = len(visible_ids)
+    # actual = primer step visible no done
+    current = visible_ids[-1] if all(
+        steps_state[i]["status"] == "done" for i in visible_ids
+    ) else next(
+        i for i in visible_ids if steps_state[i]["status"] != "done"
+    )
+    return current, total
+
+
 # ==============================
-# LAYOUT PRINCIPAL
+# LAYOUT: HEADER
 # ==============================
 
 main_frame = ctk.CTkFrame(app, fg_color=APP_BG, corner_radius=0)
 main_frame.pack(fill="both", expand=True)
 
-# ---------- HEADER ----------
 header_frame = ctk.CTkFrame(
     main_frame,
     fg_color=HEADER_BG,
@@ -67,6 +191,7 @@ header_frame = ctk.CTkFrame(
 header_frame.pack(fill="x", padx=0, pady=0)
 header_frame.pack_propagate(False)
 
+# Botón BPM
 heart_button = ctk.CTkButton(
     header_frame,
     text="BPM",
@@ -77,27 +202,28 @@ heart_button = ctk.CTkButton(
     width=68,
     height=32,
     corner_radius=16,
-    command=abrir_frecuencia_cardiaca,
+    command=lambda: subprocess.Popen(["python", "frecuencia_cardiaca.py"]),
     cursor="hand2",
     border_width=1,
     border_color="#D1D5FF"
 )
 heart_button.place(x=22, y=24)
 
+# Botón cerrar (suave, no rojo agresivo)
 close_button = ctk.CTkButton(
     header_frame,
     text="✕",
     font=("Helvetica", 18, "bold"),
     fg_color="white",
-    hover_color="#FFE5E5",
-    text_color="#F35B5B",
+    hover_color="#ECEEF7",
+    text_color="#A0A2B5",
     width=44,
     height=32,
     corner_radius=16,
     command=cerrar_app,
     cursor="hand2",
     border_width=1,
-    border_color="#F3B6B6"
+    border_color="#D6D8E6"
 )
 close_button.place(relx=1.0, x=-70, y=24)
 
@@ -120,186 +246,206 @@ subtitle_label = ctk.CTkLabel(
 )
 subtitle_label.pack(anchor="center", pady=(2, 0))
 
-# ---------- ZONA CENTRAL ----------
+# ==============================
+# LAYOUT: ZONA CENTRAL
+# ==============================
+
 center_frame = ctk.CTkFrame(main_frame, fg_color=APP_BG)
 center_frame.pack(fill="both", expand=True, padx=72, pady=(24, 16))
 
-cards_frame = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=20)
-cards_frame.pack(expand=True, fill="both")
+card_outer = ctk.CTkFrame(center_frame, fg_color=CARD_BG, corner_radius=20)
+card_outer.pack(expand=True, fill="both")
 
-# Contenido interno: 2 columnas (izquierda info, derecha módulos)
-content_frame = ctk.CTkFrame(cards_frame, fg_color="transparent")
-content_frame.pack(expand=True, fill="both", padx=20, pady=16)
+inner = ctk.CTkFrame(card_outer, fg_color="transparent")
+inner.pack(expand=True, fill="both", padx=26, pady=18)
 
-content_frame.grid_columnconfigure(0, weight=1)
-content_frame.grid_columnconfigure(1, weight=2)
-content_frame.grid_rowconfigure(0, weight=1)
-
-# ----- PANEL IZQUIERDO (texto / “how to use”) -----
-left_panel = ctk.CTkFrame(
-    content_frame,
-    fg_color=SIDE_BG,
-    corner_radius=18
-)
-left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 14), pady=4)
-
-left_inner = ctk.CTkFrame(left_panel, fg_color="transparent")
-left_inner.pack(expand=True, fill="both", padx=18, pady=16)
-
-welcome_label = ctk.CTkLabel(
-    left_inner,
-    text="Welcome to CalmSync",
-    font=("Helvetica", 17, "bold"),
+# Cabecera de sesión con progreso
+session_title = ctk.CTkLabel(
+    inner,
+    text="Session 1 · Relax & Focus",
+    font=("Helvetica", 16, "bold"),
     text_color=TEXT_MAIN
 )
-welcome_label.pack(anchor="w", pady=(0, 6))
+session_title.pack(anchor="w")
 
-welcome_text = (
-    "CalmSync helps you observe and gently\n"
-    "guide your mental state using EEG-based\n"
-    "neurofeedback."
-)
-welcome_body = ctk.CTkLabel(
-    left_inner,
-    text=welcome_text,
+session_sub = ctk.CTkLabel(
+    inner,
+    text="Follow the steps in order for a full before/after experience.",
     font=("Helvetica", 12),
-    text_color=TEXT_SOFT,
-    justify="left"
+    text_color=TEXT_SOFT
 )
-welcome_body.pack(anchor="w", pady=(0, 14))
+session_sub.pack(anchor="w", pady=(0, 6))
 
-steps_label = ctk.CTkLabel(
-    left_inner,
-    text="Recommended flow",
-    font=("Helvetica", 13, "bold"),
-    text_color=TEXT_MAIN
-)
-steps_label.pack(anchor="w", pady=(0, 4))
-
-steps = [
-    "1 · Calibrate the sensor and baseline.",
-    "2 · Watch your Alpha/Beta waves.",
-    "3 · Play the Neurofeedback Game.",
-    "4 · Finish with the Stroop test."
-]
-for s in steps:
-    lbl = ctk.CTkLabel(
-        left_inner,
-        text=s,
-        font=("Helvetica", 12),
-        text_color=TEXT_SOFT,
-        justify="left"
-    )
-    lbl.pack(anchor="w")
-
-tip_label = ctk.CTkLabel(
-    left_inner,
-    text="\nTip: Sit comfortably, relax your shoulders\nand breathe slowly during sessions.",
+progress_label = ctk.CTkLabel(
+    inner,
+    text="",  # lo rellenamos en refresh_ui()
     font=("Helvetica", 11),
-    text_color=TEXT_SOFT,
-    justify="left"
+    text_color=TEXT_SOFT
 )
-tip_label.pack(anchor="w", pady=(6, 0))
+progress_label.pack(anchor="w", pady=(0, 12))
 
-# ----- PANEL DERECHO (lista de módulos) -----
-right_panel = ctk.CTkFrame(
-    content_frame,
-    fg_color="transparent"
-)
-right_panel.grid(row=0, column=1, sticky="nsew", padx=(14, 0), pady=4)
+# Contenedor de las tarjetas de steps
+steps_container = ctk.CTkFrame(inner, fg_color="transparent")
+steps_container.pack(expand=True, fill="both")
 
-right_panel.grid_rowconfigure((0, 1, 2, 3), weight=1, uniform="rows")
-right_panel.grid_columnconfigure(0, weight=1)
+steps_container.grid_columnconfigure(0, weight=1)
+# max 5 filas
+for r in range(5):
+    steps_container.grid_rowconfigure(r, weight=1, uniform="rows")
 
-modules = [
-    ("Calibration",
-     "Check signal quality and prepare your baseline.",
-     abrir_calibration,
-     "1"),
-    ("Bars Visualizer",
-     "See your Alpha/Beta waves in real time.",
-     abrir_bars_visualizer,
-     "2"),
-    ("Neurofeedback Game",
-     "Change the weather with your mental state.",
-     abrir_neurofeedback,
-     "3"),
-    ("Stroop Game",
-     "Test cognitive control in a gentle way.",
-     abrir_stroop_game,
-     "4"),
-]
 
-button_refs = []
+def create_step_cards():
+    """Crea las tarjetas (UI) de cada step."""
+    for idx, cfg in enumerate(STEPS_CONFIG):
+        sid = cfg["id"]
+        row = idx  # 0..4
 
-for idx, (title, desc, cmd, key) in enumerate(modules):
-    row = idx
+        frame = ctk.CTkFrame(
+            steps_container,
+            fg_color=CARD_BG,
+            corner_radius=16,
+            border_width=1,
+            border_color="#E0E3F0"
+        )
+        # grid más tarde según visibilidad
+        step_widgets[sid] = {
+            "frame": frame,
+            "number": None,
+            "title": None,
+            "subtitle": None,
+            "button": None,
+            "status": None,
+        }
 
-    card = ctk.CTkFrame(
-        right_panel,
-        fg_color=CARD_BG,
-        corner_radius=16,
-        border_width=1,
-        border_color="#E0E3F0"
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_columnconfigure(1, weight=0)
+
+        # columna izquierda
+        left = ctk.CTkFrame(frame, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=10)
+
+        number_label = ctk.CTkLabel(
+            left,
+            text=str(sid),
+            font=("Helvetica", 12, "bold"),
+            text_color=ACCENT,
+            fg_color=ACCENT_SOFT,
+            corner_radius=999,
+            width=24,
+            height=22
+        )
+        number_label.pack(anchor="w")
+
+        title_label = ctk.CTkLabel(
+            left,
+            text=cfg["title"],
+            font=("Helvetica", 16, "bold"),
+            text_color=TEXT_MAIN
+        )
+        title_label.pack(anchor="w", pady=(4, 0))
+
+        subtitle_label = ctk.CTkLabel(
+            left,
+            text=cfg["subtitle"],
+            font=("Helvetica", 12),
+            text_color=TEXT_SOFT,
+            justify="left"
+        )
+        subtitle_label.pack(anchor="w", pady=(1, 0))
+
+        status_label = ctk.CTkLabel(
+            left,
+            text="",  # se rellena luego
+            font=("Helvetica", 11),
+            text_color=TEXT_SOFT
+        )
+        status_label.pack(anchor="w", pady=(2, 0))
+
+        # columna derecha
+        right = ctk.CTkFrame(frame, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=10)
+
+        btn = ctk.CTkButton(
+            right,
+            text=cfg["btn_text"],
+            font=("Helvetica", 13, "bold"),
+            text_color="white",
+            fg_color=ACCENT,
+            hover_color="#4A57D9",
+            corner_radius=18,
+            width=170,
+            height=32,
+            command=lambda sid=sid: start_step(sid),
+            cursor="hand2"
+        )
+        btn.pack(anchor="e")
+
+        # guardamos referencias
+        step_widgets[sid]["number"] = number_label
+        step_widgets[sid]["title"] = title_label
+        step_widgets[sid]["subtitle"] = subtitle_label
+        step_widgets[sid]["button"] = btn
+        step_widgets[sid]["status"] = status_label
+
+        # atajos de teclado
+        button_refs.append((btn, cfg["shortcut"], lambda sid=sid: start_step(sid)))
+
+
+def refresh_ui():
+    """Actualiza la apariencia de cada step según su estado."""
+    # Progreso
+    current_step, total_steps = get_progress()
+    progress_label.configure(
+        text=f"Step {current_step} of {total_steps} · approx 25–30 min total"
     )
-    card.grid(row=row, column=0, padx=4, pady=6, sticky="nsew")
 
-    card.grid_columnconfigure(0, weight=1)
-    card.grid_columnconfigure(1, weight=0)
+    for idx, cfg in enumerate(STEPS_CONFIG):
+        sid = cfg["id"]
+        w = step_widgets[sid]
+        state = steps_state[sid]
 
-    left = ctk.CTkFrame(card, fg_color="transparent")
-    left.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=10)
+        frame = w["frame"]
+        is_visible = state["visible"]
+        if is_visible:
+            frame.grid(row=idx, column=0, padx=2, pady=6, sticky="nsew")
+        else:
+            frame.grid_forget()
+            continue
 
-    badge = ctk.CTkLabel(
-        left,
-        text=key,
-        font=("Helvetica", 12, "bold"),
-        text_color=ACCENT,
-        fg_color=ACCENT_SOFT,
-        corner_radius=999,
-        width=24,
-        height=22
-    )
-    badge.pack(anchor="w")
+        status = state["status"]
+        btn = w["button"]
+        num_lbl = w["number"]
+        status_lbl = w["status"]
 
-    title_label = ctk.CTkLabel(
-        left,
-        text=title,
-        font=("Helvetica", 16, "bold"),
-        text_color=TEXT_MAIN
-    )
-    title_label.pack(anchor="w", pady=(4, 0))
+        # reset estilos base
+        frame.configure(border_color="#E0E3F0")
+        num_lbl.configure(text_color=ACCENT, fg_color=ACCENT_SOFT)
+        btn.configure(fg_color=ACCENT, state="normal")
+        status_text = ""
 
-    desc_label = ctk.CTkLabel(
-        left,
-        text=desc,
-        font=("Helvetica", 12),
-        text_color=TEXT_SOFT,
-        justify="left"
-    )
-    desc_label.pack(anchor="w", pady=(1, 0))
+        if status == "locked":
+            btn.configure(state="disabled", fg_color="#DADCFA")
+            status_text = "Locked · complete previous step first."
+            num_lbl.configure(text_color="#A3A6C5", fg_color="#E5E7FA")
+        elif status == "ready":
+            status_text = f"Ready · {cfg['approx']}"
+        elif status == "running":
+            btn.configure(text="Running…", state="disabled", fg_color=ACCENT)
+            status_text = "In progress…"
+            frame.configure(border_color=ACCENT)
+        elif status == "done":
+            status_text = f"Completed · {cfg['approx']}"
+            btn.configure(text="Run again", state="normal", fg_color="#4A57D9")
+            num_lbl.configure(text="✓", text_color="white", fg_color=ACCENT)
+            frame.configure(border_color=ACCENT)
 
-    right = ctk.CTkFrame(card, fg_color="transparent")
-    right.grid(row=0, column=1, sticky="e", padx=(0, 16), pady=10)
+        status_lbl.configure(text=status_text)
 
-    btn = ctk.CTkButton(
-        right,
-        text=f"Start  ({key})",
-        font=("Helvetica", 13, "bold"),
-        text_color="white",
-        fg_color=ACCENT,
-        hover_color="#4A57D9",
-        corner_radius=18,
-        width=110,
-        height=32,
-        command=cmd,
-        cursor="hand2"
-    )
-    btn.pack(anchor="e")
 
-    button_refs.append((btn, key, cmd))
+# ==============================
+# FOOTER
+# ==============================
 
-# ---------- FOOTER ----------
 footer_frame = ctk.CTkFrame(
     main_frame,
     fg_color=FOOTER_BG,
@@ -330,7 +476,7 @@ footer_label2.pack(anchor="w", pady=(1, 0))
 
 footer_hint = ctk.CTkLabel(
     footer_inner,
-    text="Press 1–4 to open modules · Esc to exit",
+    text="Press 1–5 to open steps · Esc to exit",
     font=("Helvetica", 11),
     text_color=TEXT_SOFT
 )
@@ -341,13 +487,22 @@ footer_hint.pack(anchor="e")
 # ==============================
 
 def on_key(event):
-    for btn, key, cmd in button_refs:
+    # Atajos numéricos
+    for _btn, key, cmd in button_refs:
         if event.char == key:
             cmd()
     if event.keysym == "Escape":
         cerrar_app()
 
 app.bind("<Key>", on_key)
+
+# ==============================
+# INIT
+# ==============================
+
+create_step_cards()
+refresh_ui()
+poll_processes()
 
 # ==============================
 # MAINLOOP

@@ -37,6 +37,17 @@ IR_MIN = 0.3
 IR_MAX = 3.0
 IR_RANGE = IR_MAX - IR_MIN
 
+# --- NUEVO: dinámica de la escena basada en IR normalizado (0–1) ---
+
+# Umbrales en el IR normalizado (ir_smoothed) para considerar relax / tensión
+SCENE_RELAX_THRESHOLD = 0.6   # por encima de esto: relax claro
+SCENE_STRESS_THRESHOLD = 0.4  # por debajo de esto: estrés claro
+
+# Velocidad de cambio de la escena
+SCENE_STEP_UP = 0.01    # cuanto más alto, más rápido pasa de tormenta -> sol
+SCENE_STEP_DOWN = 0.015 # un poco más rápido hacia tormenta
+SCENE_DRIFT = 0.003     # tendencia lenta a volver al punto medio (0.5) en neutral
+
 # Transición por etapas
 LIGHTNING_END_THRESHOLD = 0.50    # A partir de aquí no hay rayos
 SUN_START_THRESHOLD = 0.55        # A partir de aquí empieza a aparecer el sol
@@ -445,6 +456,7 @@ class NeurofeedbackGame:
         self.running = True
         self._ir_initialized = False
         self.calibration_profile: Optional[BaselineProfile] = None
+        self.scene_level = 0.5  # 0 = tormenta, 1 = sol
         self.calibration_summary = "Pendiente"
         if not self.use_real_data:
             self.calibration_summary = "Global (simulación)"
@@ -473,6 +485,38 @@ class NeurofeedbackGame:
         else:
             delta = max(delta, -IR_MAX_STEP_DOWN)
         return previous + delta
+
+    def _update_scene_level(self, ir_value: float) -> float:
+        """
+        Actualiza el nivel de escena (0.0–1.0) a partir del IR normalizado.
+
+        - ir_value < SCENE_STRESS_THRESHOLD  → escena hacia tormenta
+        - ir_value > SCENE_RELAX_THRESHOLD  → escena hacia sol
+        - en medio → deriva lenta hacia punto neutro (0.5)
+
+        De esta forma:
+        - la escena no responde a microfluctuaciones,
+        - solo a desviaciones mantenidas, generando latencias claras.
+        """
+        level = self.scene_level
+
+        if ir_value >= SCENE_RELAX_THRESHOLD:
+            # IR alto sostenido → relajación → sube hacia el sol
+            level += SCENE_STEP_UP
+        elif ir_value <= SCENE_STRESS_THRESHOLD:
+            # IR bajo sostenido → estrés → baja hacia tormenta
+            level -= SCENE_STEP_DOWN
+        else:
+            # IR en zona neutra → la escena tiende despacio al punto medio
+            if level < 0.5:
+                level += SCENE_DRIFT
+            elif level > 0.5:
+                level -= SCENE_DRIFT
+
+        # Limitar a [0,1]
+        level = max(0.0, min(1.0, level))
+        return level
+
 
     # ------------------------ DATOS EEG ------------------------
 
@@ -555,6 +599,10 @@ class NeurofeedbackGame:
         blended = (SMOOTHING_IR * filtered_ir + 
                    (1 - SMOOTHING_IR) * self.state.ir_smoothed)
         self.state.ir_smoothed = self._limit_ir_transition(self.state.ir_smoothed, blended)
+
+        # NUEVO: la escena depende de un nivel con memoria, no del IR directo
+        self.scene_level = self._update_scene_level(self.state.ir_smoothed)
+
 
     # ------------------------ CALIBRACIÓN INTERNA IR ------------------------
 
@@ -697,7 +745,8 @@ class NeurofeedbackGame:
         """
         Orden de dibujo (cielo → paisaje → sol → nubes → lluvia → rayos → overlay → HUD).
         """
-        ir_norm = self.state.ir_smoothed
+        # ir_norm: lo que controla la escena (0 tormenta – 1 sol)
+        ir_norm = self.scene_level
         stress_level = 1.0 - ir_norm
 
         # Opacidad del sol

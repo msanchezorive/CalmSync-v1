@@ -14,9 +14,10 @@ from udp import EEGClient
 # CONSTANTES GENERALES / CONFIG
 # ---------------------------------------------------------------------
 
-# BASE_DIR = carpeta raíz del proyecto (la que tiene 'assets' y 'raspberry')
+# --- RUTAS BASE ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_PATH = os.path.join(BASE_DIR, 'assets')
+
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 30
@@ -31,7 +32,7 @@ RAIN_FALL_SPEED = 15
 CLOUD_BASE_SPEED = 5
 RAIN_LENGTH_RANGE = (5, 10)
 
-# IR mapping constants (para IR α/β, solo informativo ahora)
+# IR mapping constants
 IR_MIN = 0.3
 IR_MAX = 3.0
 IR_RANGE = IR_MAX - IR_MIN
@@ -46,15 +47,15 @@ LIGHTNING_DURATION_FRAMES = 5
 LIGHTNING_MIN_INTERVAL = 30
 LIGHTNING_MAX_INTERVAL = 90
 
-# Índices EEG (coinciden con udp.py si se usan)
+# Índices EEG (coinciden con udp.py)
 ALPHA_IDX = [2, 3]
 BETA_IDX = [4, 5]
 
 # Suavizado
-SMOOTHING_ALPHA = 0.15   # para señales EEG / eSense
-SMOOTHING_IR = 0.1       # para el índice visual
+SMOOTHING_ALPHA = 0.15   # para señales EEG
+SMOOTHING_IR = 0.1       # para el IR visual
 
-# Calibración interna del IR α/β (solo para mostrar info)
+# Calibración interna del IR
 CALIBRATION_DURATION = 10.0
 CALIBRATION_STABLE_SECONDS = 2.0
 CALIBRATION_MIN_CONFIDENCE = 0.65
@@ -78,8 +79,7 @@ EYE_SUPPRESSION_DECAY = 1.4  # s
 # Sistema de confianza gradual
 CONFIDENCE_INCREASE_RATE = 0.05
 CONFIDENCE_DECREASE_RATE = 0.02
-MIN_CONFIDENCE_THRESHOLD = 0.3
-
+MIN_CONFIDENCE_THRESHOLD = 0.3   # (no lo usamos como corte duro, pero por si quieres)
 
 # ---------------------------------------------------------------------
 # DATA CLASSES
@@ -114,14 +114,14 @@ class GameState:
     attention: float
     meditation: float
     confidence: float
-    ir_normalized: float  # IR α/β normalizado (solo info)
-    ir_smoothed: float    # IR α/β suavizado (solo info)
+    ir_normalized: float
+    ir_smoothed: float
     frame_count: int
 
 
 @dataclass
 class BaselineProfile:
-    """Perfil estadístico personal para normalizar IR α/β."""
+    """Perfil estadístico personal para normalizar IR."""
     mean: float
     std: float
 
@@ -141,7 +141,7 @@ class BaselineProfile:
 
 
 class EyeArtifactFilter:
-    """Detecta cierres/aperturas de ojos y amortigua su impacto en el IR (α/β)."""
+    """Detecta cierres/aperturas de ojos y amortigua su impacto en el IR."""
 
     def __init__(self):
         self.fast_alpha: Optional[float] = None
@@ -191,6 +191,13 @@ class EyeArtifactFilter:
             self.last_clean_ir = blended
 
         return blended
+
+    def status_text(self) -> str:
+        if self.suppression >= 0.7:
+            return "Ojos cerrados"
+        if self.suppression >= 0.3:
+            return "Filtrando"
+        return "Libre"
 
 
 # ---------------------------------------------------------------------
@@ -260,12 +267,12 @@ class LightningSystem:
         # Elimina rayos expirados
         self.lightnings = [l for l in self.lightnings if l.update()]
         
-        # Si el índice de calma ya es suficientemente alto, no hay rayos
+        # Si IR ya es suficientemente alto, no hay rayos
         if ir_normalized >= LIGHTNING_END_THRESHOLD:
             self.frames_since_last = 0
             return
         
-        # Intensidad de rayos según índice (baja calma → más rayos)
+        # Intensidad de rayos según IR
         lightning_intensity = max(0.0, (LIGHTNING_END_THRESHOLD - ir_normalized) / LIGHTNING_END_THRESHOLD)
         if lightning_intensity < 0.05:
             self.frames_since_last = 0
@@ -443,10 +450,9 @@ class NeurofeedbackGame:
             self.calibration_summary = "Global (simulación)"
         self.eye_filter = EyeArtifactFilter()
 
-    # ------------------------ LÓGICA IR / CALM ------------------------
+    # ------------------------ LÓGICA IR ------------------------
 
     def _compute_ir_ratio(self, alpha: float, beta: float) -> float:
-        """IR real α/β, solo para información."""
         beta = max(0.1, beta)
         return alpha / beta
 
@@ -467,19 +473,6 @@ class NeurofeedbackGame:
         else:
             delta = max(delta, -IR_MAX_STEP_DOWN)
         return previous + delta
-
-    def compute_calm_level(self) -> float:
-        """
-        Índice de calma basado en eSense:
-        - meditation alta → más calma
-        - attention alta → resta calma
-        Resultado en [0, 1].
-        """
-        med_norm = max(0.0, min(1.0, self.state.meditation / 100.0))
-        att_norm = max(0.0, min(1.0, self.state.attention / 100.0))
-
-        calm = 0.7 * med_norm + 0.3 * (1.0 - att_norm)
-        return max(0.0, min(1.0, calm))
 
     # ------------------------ DATOS EEG ------------------------
 
@@ -504,7 +497,7 @@ class NeurofeedbackGame:
         self.state.meditation = (SMOOTHING_ALPHA * raw_med +
                                  (1 - SMOOTHING_ALPHA) * self.state.meditation)
 
-        # Confianza basada en atención/meditación
+        # Confianza basada en atención/meditación (igual que antes)
         if self.state.attention >= 20 or self.state.meditation >= 15:
             self.state.confidence = min(1.0, self.state.confidence + CONFIDENCE_INCREASE_RATE)
         else:
@@ -524,7 +517,7 @@ class NeurofeedbackGame:
         if signal_quality >= 200:
             self.connection_status = "Sin señal"
         elif signal_quality > 50:
-            self.connection_status = f"Conectado (ajusta sensor, ruido={signal_quality})"
+            self.connection_status = f"Connected (ajusta sensor, ruido={signal_quality})"
         else:
             self.connection_status = "Conectado (buena señal)"
 
@@ -541,39 +534,39 @@ class NeurofeedbackGame:
         self.state.confidence = 1.0
 
     def update_data(self):
-        """Actualiza alpha/beta/IR y aplica filtro de ojos (para IR α/β informativo)."""
+        """Actualiza alpha/beta/IR y aplica filtro de ojos."""
         if self.use_real_data and self.client:
             self._update_from_real_eeg()
         else:
             self._update_from_simulation()
 
-        # Filtro de artefactos de ojos (usando alpha)
+        # Filtro de artefactos de ojos
         self.eye_filter.update_alpha(self.state.alpha)
         
-        # IR α/β normalizado (antes de filtro ojos, solo info)
+        # IR normalizado (antes de filtro ojos)
         self.state.ir_normalized = self.calculate_ir_normalized(
             self.state.alpha, self.state.beta
         )
 
-        # Filtro de ojos sobre el IR α/β
+        # Filtro de ojos sobre el IR
         filtered_ir = self.eye_filter.apply(self.state.ir_normalized)
         
-        # Suavizado + limitadores de transición para IR α/β (solo info)
+        # Suavizado + limitadores de transición
         blended = (SMOOTHING_IR * filtered_ir + 
                    (1 - SMOOTHING_IR) * self.state.ir_smoothed)
         self.state.ir_smoothed = self._limit_ir_transition(self.state.ir_smoothed, blended)
 
-    # ------------------------ CALIBRACIÓN INTERNA IR α/β ------------------------
+    # ------------------------ CALIBRACIÓN INTERNA IR ------------------------
 
     def perform_calibration(self):
         """
-        Calibración interna del IR α/β (distinta de initial_calibration.py).
+        Calibración interna del IR (distinta de initial_calibration.py).
         Ahora lee los datos de EEGClient a través de update_data().
         """
         if not self.use_real_data or not self.client:
             return
 
-        print("\n🧘 Iniciando calibración personalizada de IR (α/β)...")
+        print("\n🧘 Iniciando calibración personalizada de IR...")
         print("   Si ya has hecho la 'initial calibration', esto ajusta solo tu rango α/β.\n")
 
         samples: List[float] = []
@@ -603,7 +596,7 @@ class NeurofeedbackGame:
             confidence = self.state.confidence
             ratio = self._compute_ir_ratio(alpha, beta)
 
-            # Lógica de recogida de muestras
+            # Lógica de recogida de muestras (similar a antes)
             collecting = False
             if confidence >= CALIBRATION_MIN_CONFIDENCE:
                 if stable_start is None:
@@ -703,13 +696,8 @@ class NeurofeedbackGame:
     def render(self):
         """
         Orden de dibujo (cielo → paisaje → sol → nubes → lluvia → rayos → overlay → HUD).
-        El clima ahora depende de CalmIdx (attention + meditation).
         """
-        # Índice de calma [0,1] basado en eSense
-        calm_level = self.compute_calm_level()
-
-        # Reutilizamos ir_norm como índice de calma para el clima
-        ir_norm = calm_level
+        ir_norm = self.state.ir_smoothed
         stress_level = 1.0 - ir_norm
 
         # Opacidad del sol
@@ -752,21 +740,15 @@ class NeurofeedbackGame:
         self._draw_info(ir_norm, stress_level)
 
     def _draw_info(self, ir_norm: float, stress_level: float):
-        """
-        ir_norm aquí es CalmIdx (0–1).
-        Mostramos también IR α/β real y α, β.
-        """
         text_color = (255, 255, 255) if ir_norm < 0.5 else (50, 50, 50)
-
-        ir_ratio = self._compute_ir_ratio(self.state.alpha, self.state.beta)
         
         lines = [
-            f"CalmIdx: {ir_norm:.2f} | IR α/β: {ir_ratio:.2f} | α: {self.state.alpha:.1f} | β: {self.state.beta:.1f}",
+            f"IR: {ir_norm:.2f} | α: {self.state.alpha:.1f} | β: {self.state.beta:.1f}",
             f"Atención: {self.state.attention:.0f} | Meditación: {self.state.meditation:.0f}",
             f"Confianza: {self.state.confidence*100:.0f}% | Rayos: {len(self.lightning.lightnings)}"
         ]
         
-        # Estado en función del CalmIdx
+        # Estado en función del IR
         if ir_norm < LIGHTNING_END_THRESHOLD:
             lightning_strength = ((LIGHTNING_END_THRESHOLD - ir_norm) / LIGHTNING_END_THRESHOLD) * 100
             state_text = f"⚡ ESTRESADO - Rayos: {lightning_strength:.0f}%"
@@ -784,7 +766,7 @@ class NeurofeedbackGame:
         status = self.connection_status
         lines.append(f"Modo: {mode} | Estado: {status}")
         lines.append(f"Baseline IR: {self.calibration_summary}")
-        # Se ha eliminado la línea de "Ojos: ..." del HUD
+        lines.append(f"Ojos: {self.eye_filter.status_text()}")
         
         for i, line in enumerate(lines):
             text_surface = self.font.render(line, True, text_color)
@@ -796,13 +778,13 @@ class NeurofeedbackGame:
         print("\n" + "="*60)
         print("🎮 CalmSync - Neurofeedback en Tiempo Real (vía udp.EEGClient)")
         print("="*60)
-        print("📊 Sistema de transición por etapas (usando CalmIdx):")
-        print(f"   • CalmIdx bajo  → ⚡ Rayos / tormenta")
-        print(f"   • CalmIdx medio → 🌥️ Despejando")
-        print(f"   • CalmIdx alto  → ☀️ Sol apareciendo")
+        print("📊 Sistema de transición por etapas:")
+        print(f"   • IR < {LIGHTNING_END_THRESHOLD:.2f}  → ⚡ Rayos progresivos")
+        print(f"   • IR {LIGHTNING_END_THRESHOLD:.2f}-{SUN_START_THRESHOLD:.2f} → 🌥️ Despejando")
+        print(f"   • IR > {SUN_START_THRESHOLD:.2f}  → ☀️ Sol apareciendo")
         print("\n⌨️  ESC para salir\n")
 
-        # Calibración IR α/β solo con datos reales (informativa)
+        # Calibración IR solo con datos reales
         if self.use_real_data and self.client:
             self.perform_calibration()
             if not self.running:
@@ -818,13 +800,10 @@ class NeurofeedbackGame:
 
             self.update_data()
 
-            # Clima basado en CalmIdx (calculado dentro de render)
-            calm_level = self.compute_calm_level()
-            stress_level = 1.0 - calm_level
-
+            stress_level = 1.0 - self.state.ir_smoothed
             self.rain.update(stress_level)
-            self.clouds.update(calm_level)
-            self.lightning.update(stress_level, calm_level)
+            self.clouds.update(self.state.ir_smoothed)
+            self.lightning.update(stress_level, self.state.ir_smoothed)
 
             self.render()
 
